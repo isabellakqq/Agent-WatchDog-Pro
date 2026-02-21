@@ -20,6 +20,7 @@ use serde::Serialize;
 use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
 
+use crate::config::Config;
 use crate::event_store::{AlertEvent, SharedEventStore};
 
 // ── App state ────────────────────────────────────────────────────
@@ -29,6 +30,7 @@ use crate::event_store::{AlertEvent, SharedEventStore};
 pub struct AppState {
     pub store: SharedEventStore,
     pub tx: broadcast::Sender<AlertEvent>,
+    pub config: Arc<Config>,
 }
 
 // ── Router ───────────────────────────────────────────────────────
@@ -51,6 +53,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/events/{id}/block", post(block_event))
         // Mark as false-positive
         .route("/api/events/{id}/ignore", post(ignore_event))
+        // Runtime config (dry-run status, whitelist info)
+        .route("/api/config", get(get_config))
         // WebSocket for real-time events
         .route("/ws/events", get(ws_handler))
         // Health check
@@ -63,6 +67,26 @@ pub fn create_router(state: AppState) -> Router {
 
 async fn health() -> &'static str {
     "ok"
+}
+
+/// Expose runtime configuration to the frontend.
+#[derive(Serialize)]
+struct ConfigResponse {
+    dry_run: bool,
+    whitelist_processes: Vec<String>,
+    whitelist_pids: Vec<u32>,
+    whitelist_paths: Vec<String>,
+}
+
+async fn get_config(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    Json(ConfigResponse {
+        dry_run: state.config.dry_run,
+        whitelist_processes: state.config.whitelist_processes.clone(),
+        whitelist_pids: state.config.whitelist_pids.clone(),
+        whitelist_paths: state.config.whitelist_paths.clone(),
+    })
 }
 
 async fn get_stats(
@@ -102,22 +126,33 @@ async fn block_event(
 
     match store.block_event(&id) {
         Some(event) => {
-            // Attempt to kill the process.
             let pid = event.pid;
+            let dry_run = state.config.dry_run;
             drop(store); // release lock before syscall
 
-            // SAFETY: we are sending SIGKILL to the process.
-            // This requires root — which Agent-WatchDog already runs as.
-            let killed = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
-            let msg = if killed == 0 {
-                info!("🛑 Blocked process {} (PID: {})", event.comm, pid);
-                format!("Process {} (PID: {}) has been killed", event.comm, pid)
-            } else {
-                warn!("Failed to kill PID {} (may have already exited)", pid);
+            let msg = if dry_run {
+                info!(
+                    "🔸 [DRY-RUN] Would have killed process {} (PID: {}), but dry-run is enabled",
+                    event.comm, pid
+                );
                 format!(
-                    "Process marked as blocked but kill failed (PID: {} may have exited)",
-                    pid
+                    "[DRY-RUN] Process {} (PID: {}) marked as blocked (not actually killed)",
+                    event.comm, pid
                 )
+            } else {
+                // SAFETY: we are sending SIGKILL to the process.
+                // This requires root — which Agent-WatchDog already runs as.
+                let killed = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+                if killed == 0 {
+                    info!("🛑 Blocked process {} (PID: {})", event.comm, pid);
+                    format!("Process {} (PID: {}) has been killed", event.comm, pid)
+                } else {
+                    warn!("Failed to kill PID {} (may have already exited)", pid);
+                    format!(
+                        "Process marked as blocked but kill failed (PID: {} may have exited)",
+                        pid
+                    )
+                }
             };
 
             Json(ActionResponse {

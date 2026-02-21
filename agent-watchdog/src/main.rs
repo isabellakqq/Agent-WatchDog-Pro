@@ -6,9 +6,19 @@
 //!
 //! Exposes an HTTP + WebSocket API (default port 3000) for the
 //! React dashboard frontend.
+//!
+//! Supports:
+//! - **Dry-run mode**: log alerts without killing processes
+//! - **Whitelist**: skip trusted processes, PIDs, and path prefixes
+//! - **CWD resolution**: resolve relative paths via `/proc/<pid>/cwd`
 
 mod api;
+mod config;
 mod event_store;
+mod path_resolver;
+
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use aya::{
@@ -27,27 +37,8 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use agent_watchdog_common::FileOpenEvent;
+use config::Config;
 use event_store::{AlertEvent, AlertStatus, EventStore, Severity};
-
-// ── Sensitive-file keywords ──────────────────────────────────────
-/// If an opened filename contains ANY of these substrings (case-
-/// insensitive), we treat it as a high-risk event.
-const SENSITIVE_KEYWORDS: &[&str] = &[
-    ".env",
-    "id_rsa",
-    "id_ed25519",
-    "id_ecdsa",
-    "shadow",
-    "aws/credentials",
-    "gcp/application_default_credentials.json",
-    ".kube/config",
-    ".docker/config.json",
-    "secrets.yaml",
-    "secrets.yml",
-    "master.key",
-    ".pgpass",
-    ".netrc",
-];
 
 // ── CLI ──────────────────────────────────────────────────────────
 #[derive(Debug, Parser)]
@@ -67,6 +58,15 @@ struct Opt {
     /// Port for the HTTP/WebSocket API server.
     #[arg(short, long, default_value = "3000")]
     port: u16,
+
+    /// Path to the TOML configuration file.
+    #[arg(short, long, default_value = "watchdog.toml")]
+    config: PathBuf,
+
+    /// Enable dry-run mode (overrides config file).
+    /// Alerts are logged but processes are NOT killed.
+    #[arg(long)]
+    dry_run: bool,
 }
 
 // ── Entry point ──────────────────────────────────────────────────
@@ -74,6 +74,20 @@ struct Opt {
 async fn main() -> Result<()> {
     let opt = Opt::parse();
     env_logger::init();
+
+    // ── 0. Load configuration ────────────────────────────────────
+    let mut config = Config::load(&opt.config)?;
+
+    // CLI --dry-run flag overrides the config file.
+    if opt.dry_run {
+        config.dry_run = true;
+    }
+
+    if config.dry_run {
+        info!("⚠️   DRY-RUN mode enabled — alerts will be logged but processes will NOT be killed");
+    }
+
+    let config = Arc::new(config);
 
     // ── 1. Shared state ──────────────────────────────────────────
     let store = EventStore::shared();
@@ -83,6 +97,7 @@ async fn main() -> Result<()> {
     let api_state = api::AppState {
         store: store.clone(),
         tx: tx.clone(),
+        config: config.clone(),
     };
     let router = api::create_router(api_state);
 
@@ -136,7 +151,7 @@ async fn main() -> Result<()> {
     .context("failed to create PerfEventArray from EVENTS map")?;
 
     let cpus = online_cpus().map_err(|(_, e)| e).context("failed to enumerate online CPUs")?;
-    info!("Spawning {} perf-event readers (one per CPU)", cpus.len());
+    info!("📡  Spawning {} perf-event readers (one per CPU)", cpus.len());
 
     for cpu_id in cpus {
         let mut buf = perf_array
@@ -145,21 +160,18 @@ async fn main() -> Result<()> {
 
         let store = store.clone();
         let tx = tx.clone();
+        let config = config.clone();
 
         tokio::spawn(async move {
             let mut buffers = (0..10)
                 .map(|_| BytesMut::with_capacity(core::mem::size_of::<FileOpenEvent>()))
                 .collect::<Vec<_>>();
 
-            // Poll the perf ring buffer at a short interval.
-            // This avoids the AsyncFd issue where perf_event fds are
-            // not set to non-blocking mode by default.
             let mut interval = tokio::time::interval(std::time::Duration::from_millis(10));
 
             loop {
                 interval.tick().await;
 
-                // Drain all available events.
                 while buf.readable() {
                     let events = match buf.read_events(&mut buffers) {
                         Ok(evts) => evts,
@@ -190,18 +202,37 @@ async fn main() -> Result<()> {
                             core::ptr::read_unaligned(raw.as_ptr() as *const FileOpenEvent)
                         };
 
-                        let filename = c_buf_to_str(&event.filename);
+                        let raw_filename = c_buf_to_str(&event.filename);
                         let comm = c_buf_to_str(&event.comm);
+
+                        // ── Whitelist checks ─────────────────────
+                        if config.is_process_whitelisted(&comm) {
+                            debug!("Skipping whitelisted process: {} (PID: {})", comm, event.pid);
+                            continue;
+                        }
+                        if config.is_pid_whitelisted(event.pid) {
+                            debug!("Skipping whitelisted PID: {}", event.pid);
+                            continue;
+                        }
+
+                        // ── Resolve relative paths via /proc/<pid>/cwd ──
+                        let filename = path_resolver::resolve_path(event.pid, &raw_filename);
+
+                        if config.is_path_whitelisted(&filename) {
+                            debug!("Skipping whitelisted path: {}", filename);
+                            continue;
+                        }
 
                         debug!(
                             "CPU {} event: pid={} comm={} file={}",
                             cpu_id, event.pid, comm, filename,
                         );
 
-                        if is_sensitive(&filename) {
+                        if config.is_sensitive(&filename) {
+                            let mode_tag = if config.dry_run { "DRY-RUN" } else { "LIVE" };
                             warn!(
-                                "[🚨 HIGH RISK] Process {} (PID: {}) is trying to read {}",
-                                comm, event.pid, filename,
+                                "[🚨 HIGH RISK] [{}] Process {} (PID: {}) is trying to read {}",
+                                mode_tag, comm, event.pid, filename,
                             );
 
                             let alert = AlertEvent {
@@ -212,15 +243,14 @@ async fn main() -> Result<()> {
                                 filename: filename.clone(),
                                 severity: Severity::High,
                                 status: AlertStatus::Active,
+                                dry_run: config.dry_run,
                             };
 
-                            // Store the event
                             {
                                 let mut s = store.write().await;
                                 s.push(alert.clone());
                             }
 
-                            // Broadcast to WebSocket clients (ignore if no receivers)
                             let _ = tx.send(alert);
                         }
                     }
@@ -247,9 +277,4 @@ async fn main() -> Result<()> {
 fn c_buf_to_str(buf: &[u8]) -> String {
     let nul_pos = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
     String::from_utf8_lossy(&buf[..nul_pos]).into_owned()
-}
-
-fn is_sensitive(filename: &str) -> bool {
-    let lower = filename.to_ascii_lowercase();
-    SENSITIVE_KEYWORDS.iter().any(|kw| lower.contains(kw))
 }

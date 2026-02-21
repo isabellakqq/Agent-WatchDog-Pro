@@ -1,0 +1,59 @@
+# ============================================================
+# Agent-WatchDog Configuration
+# ============================================================
+#
+# Copy this file to `watchdog.toml` in the working directory,
+# or pass --config /path/to/watchdog.toml on the command line.
+
+# ── Dry-run mode ──────────────────────────────────────────────
+# When enabled, the system logs alerts to the dashboard but
+# does NOT execute SIGKILL on block requests.
+# Good for initial deployment / testing.
+dry_run = false
+
+# ── Whitelist ─────────────────────────────────────────────────
+# Whitelisted processes are NEVER flagged as sensitive.
+# Matching is case-insensitive.
+
+# Process names to whitelist (match against `comm` field).
+# Examples: system daemons that legitimately read /etc/shadow.
+whitelist_processes = [
+    "systemd",
+    "sshd",
+    "login",
+    "su",
+    "sudo",
+    "passwd",
+    "chpasswd",
+    "useradd",
+    "userdel",
+    "groupadd",
+    "groupdel",
+    "chage",
+    "cron",
+    "crond",
+    "polkitd",
+    "agent-watchdog",
+]
+
+# PIDs to whitelist (use for specific long-running services).
+# These are checked at event time — restart changes PIDs.
+whitelist_pids = []
+
+# File path prefixes to whitelist.
+# Events accessing files under these paths are silently ignored.
+whitelist_paths = [
+    "/proc/",
+    "/sys/",
+    "/dev/",
+]
+
+# ── Sensitive keywords ────────────────────────────────────────
+# Override the built-in keyword list.
+# If empty or omitted, the compiled-in defaults are used.
+# All comparisons are case-insensitive.
+# sensitive_keywords = [
+#     ".env",
+#     "id_rsa",
+#     "shadow",
+# ]

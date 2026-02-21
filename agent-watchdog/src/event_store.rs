@@ -47,12 +47,15 @@ pub struct AlertEvent {
     pub pid: u32,
     /// Process command name (e.g. "cat", "python3").
     pub comm: String,
-    /// File path being accessed.
+    /// File path being accessed (resolved to absolute path).
     pub filename: String,
     /// Alert severity.
     pub severity: Severity,
     /// Current status.
     pub status: AlertStatus,
+    /// Whether this event was captured in dry-run mode.
+    /// If `true`, blocking will NOT actually kill the process.
+    pub dry_run: bool,
 }
 
 /// Dashboard summary statistics.
