@@ -4,9 +4,11 @@
 //! `syscalls/sys_enter_openat` tracepoint, and asynchronously polls
 //! the `PerfEventArray` for `FileOpenEvent`s.
 //!
-//! Only events whose filename matches a set of sensitive keywords
-//! are printed as high-risk warnings; everything else is silently
-//! dropped.
+//! Exposes an HTTP + WebSocket API (default port 3000) for the
+//! React dashboard frontend.
+
+mod api;
+mod event_store;
 
 use anyhow::{Context, Result};
 use aya::{
@@ -17,14 +19,15 @@ use aya::{
 };
 use aya_log::EbpfLogger;
 use bytes::BytesMut;
+use chrono::Utc;
 use clap::Parser;
-use log::{info, warn};
-use std::os::fd::AsRawFd;
-use tokio::io::unix::AsyncFd;
-use tokio::io::Interest;
+use log::{debug, info, warn};
 use tokio::signal;
+use tokio::sync::broadcast;
+use uuid::Uuid;
 
 use agent_watchdog_common::FileOpenEvent;
+use event_store::{AlertEvent, AlertStatus, EventStore, Severity};
 
 // ── Sensitive-file keywords ──────────────────────────────────────
 /// If an opened filename contains ANY of these substrings (case-
@@ -54,24 +57,48 @@ const SENSITIVE_KEYWORDS: &[&str] = &[
 )]
 struct Opt {
     /// Path to the compiled eBPF ELF object.
-    /// Defaults to the release build produced by `cargo xtask build-ebpf`.
     #[arg(
         short,
         long,
         default_value = "target/bpfel-unknown-none/release/agent-watchdog"
     )]
     bpf_path: String,
+
+    /// Port for the HTTP/WebSocket API server.
+    #[arg(short, long, default_value = "3000")]
+    port: u16,
 }
 
 // ── Entry point ──────────────────────────────────────────────────
 #[tokio::main]
 async fn main() -> Result<()> {
     let opt = Opt::parse();
-
-    // Initialise the env_logger so `RUST_LOG=info` works.
     env_logger::init();
 
-    // ── 1. Load the eBPF object ──────────────────────────────────
+    // ── 1. Shared state ──────────────────────────────────────────
+    let store = EventStore::shared();
+    let (tx, _rx) = broadcast::channel::<AlertEvent>(1024);
+
+    // ── 2. Start API server ──────────────────────────────────────
+    let api_state = api::AppState {
+        store: store.clone(),
+        tx: tx.clone(),
+    };
+    let router = api::create_router(api_state);
+
+    let addr = format!("0.0.0.0:{}", opt.port);
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .with_context(|| format!("failed to bind to {}", addr))?;
+    info!("🌐  API server listening on http://{}", addr);
+
+    tokio::spawn(async move {
+        if let Err(e) = axum::serve(listener, router).await {
+            warn!("API server error: {:#}", e);
+        }
+    });
+
+    // ── 3. Load the eBPF object ──────────────────────────────────
     info!("Loading eBPF object from: {}", opt.bpf_path);
     let mut ebpf = Ebpf::load_file(&opt.bpf_path)
         .with_context(|| format!("failed to load eBPF object from '{}'", opt.bpf_path))?;
@@ -84,7 +111,7 @@ async fn main() -> Result<()> {
         );
     }
 
-    // ── 2. Attach to the tracepoint ──────────────────────────────
+    // ── 4. Attach to the tracepoint ──────────────────────────────
     let program: &mut TracePoint = ebpf
         .program_mut("agent_watchdog")
         .context("eBPF program 'agent_watchdog' not found in object file")?
@@ -101,7 +128,7 @@ async fn main() -> Result<()> {
     info!("✅  Attached to tracepoint: syscalls/sys_enter_openat");
     info!("🔍  Monitoring sensitive file access… Press Ctrl-C to stop.\n");
 
-    // ── 3. Open PerfEventArray and spawn per-CPU readers ─────────
+    // ── 5. Open PerfEventArray and spawn per-CPU readers ─────────
     let mut perf_array = PerfEventArray::try_from(
         ebpf.take_map("EVENTS")
             .context("EVENTS map not found in the eBPF object")?,
@@ -116,33 +143,24 @@ async fn main() -> Result<()> {
             .open(cpu_id, Some(64)) // 64-page (256 KiB) ring buffer per CPU
             .context("failed to open perf buffer")?;
 
-        // Use tokio's AsyncFd to poll the perf buffer file descriptor for readability.
-        let async_fd = AsyncFd::with_interest(
-            buf.as_raw_fd(),
-            Interest::READABLE,
-        ).context("failed to create AsyncFd for perf buffer")?;
+        let store = store.clone();
+        let tx = tx.clone();
 
         tokio::spawn(async move {
             let mut buffers = (0..10)
                 .map(|_| BytesMut::with_capacity(core::mem::size_of::<FileOpenEvent>()))
                 .collect::<Vec<_>>();
 
+            // Poll the perf ring buffer at a short interval.
+            // This avoids the AsyncFd issue where perf_event fds are
+            // not set to non-blocking mode by default.
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(10));
+
             loop {
-                // Wait until the perf fd is readable (events available).
-                let mut guard = match async_fd.readable().await {
-                    Ok(guard) => guard,
-                    Err(e) => {
-                        warn!("CPU {} AsyncFd error: {:#}", cpu_id, e);
-                        continue;
-                    }
-                };
+                interval.tick().await;
 
                 // Drain all available events.
-                loop {
-                    if !buf.readable() {
-                        break;
-                    }
-
+                while buf.readable() {
                     let events = match buf.read_events(&mut buffers) {
                         Ok(evts) => evts,
                         Err(e) => {
@@ -165,6 +183,9 @@ async fn main() -> Result<()> {
                             continue;
                         }
 
+                        // SAFETY: `FileOpenEvent` is `#[repr(C)]`, `Copy`, and
+                        // contains only fixed-size fields.  The buffer is at
+                        // least `size_of::<FileOpenEvent>()` bytes (checked above).
                         let event: FileOpenEvent = unsafe {
                             core::ptr::read_unaligned(raw.as_ptr() as *const FileOpenEvent)
                         };
@@ -172,16 +193,35 @@ async fn main() -> Result<()> {
                         let filename = c_buf_to_str(&event.filename);
                         let comm = c_buf_to_str(&event.comm);
 
+                        debug!(
+                            "CPU {} event: pid={} comm={} file={}",
+                            cpu_id, event.pid, comm, filename,
+                        );
+
                         if is_sensitive(&filename) {
-                            eprintln!(
-                                "\x1b[1;31m[🚨 HIGH RISK]\x1b[0m \
-                                 Process \x1b[1;33m{comm}\x1b[0m \
-                                 (PID: \x1b[1;36m{pid}\x1b[0m) \
-                                 is trying to read \x1b[1;35m{filename}\x1b[0m",
-                                comm = comm,
-                                pid = event.pid,
-                                filename = filename,
+                            warn!(
+                                "[🚨 HIGH RISK] Process {} (PID: {}) is trying to read {}",
+                                comm, event.pid, filename,
                             );
+
+                            let alert = AlertEvent {
+                                id: Uuid::new_v4().to_string(),
+                                timestamp: Utc::now(),
+                                pid: event.pid,
+                                comm: comm.clone(),
+                                filename: filename.clone(),
+                                severity: Severity::High,
+                                status: AlertStatus::Active,
+                            };
+
+                            // Store the event
+                            {
+                                let mut s = store.write().await;
+                                s.push(alert.clone());
+                            }
+
+                            // Broadcast to WebSocket clients (ignore if no receivers)
+                            let _ = tx.send(alert);
                         }
                     }
 
@@ -189,14 +229,11 @@ async fn main() -> Result<()> {
                         break;
                     }
                 }
-
-                // Clear the readiness so tokio re-polls the fd.
-                guard.clear_ready();
             }
         });
     }
 
-    // ── 5. Block until Ctrl-C ────────────────────────────────────
+    // ── 6. Block until Ctrl-C ────────────────────────────────────
     signal::ctrl_c()
         .await
         .context("failed to listen for Ctrl-C signal")?;

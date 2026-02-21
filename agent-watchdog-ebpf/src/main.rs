@@ -49,17 +49,23 @@ static SCRATCH: PerCpuArray<FileOpenEvent> = PerCpuArray::with_max_entries(1, 0)
 
 /// Entry point — attached to `syscalls/sys_enter_openat`.
 ///
-/// The tracepoint args struct for `sys_enter_openat` (both x86_64 and
-/// aarch64) has the filename pointer at offset 16:
+/// The tracepoint args struct for `sys_enter_openat` has a
+/// common header followed by the syscall arguments.  The actual
+/// offsets depend on the kernel — check the format file:
+///
+/// ```bash
+/// sudo cat /sys/kernel/debug/tracing/events/syscalls/sys_enter_openat/format
+/// ```
+///
+/// Typical layout on x86_64 Linux 5.10:
 ///
 /// ```text
-/// struct {
-///     int __syscall_nr;       // offset  0  (padded to 8 bytes)
-///     int dfd;                // offset  8
-///     const char *filename;   // offset 16  ← target
-///     int flags;              // offset 24
-///     umode_t mode;           // offset 32
-/// };
+/// common fields:                          offset  0 (8 bytes total)
+/// __syscall_nr (int, padded):             offset  8  (8 bytes)
+/// dfd          (int, padded to long):     offset 16  (8 bytes)
+/// filename     (const char *):            offset 24  ← target
+/// flags        (int, padded to long):     offset 32  (8 bytes)
+/// mode         (umode_t, padded to long): offset 40  (8 bytes)
 /// ```
 #[tracepoint]
 pub fn agent_watchdog(ctx: TracePointContext) -> u32 {
@@ -72,7 +78,9 @@ pub fn agent_watchdog(ctx: TracePointContext) -> u32 {
 #[inline(always)]
 fn try_agent_watchdog(ctx: &TracePointContext) -> Result<u32, i64> {
     // ── 1. Extract the user-space filename pointer ───────────────
-    let filename_ptr: *const u8 = unsafe { ctx.read_at::<u64>(16)? as *const u8 };
+    // Offset 24 = the `filename` field in the tracepoint args.
+    // Verify with: sudo cat /sys/kernel/debug/tracing/events/syscalls/sys_enter_openat/format
+    let filename_ptr: *const u8 = unsafe { ctx.read_at::<u64>(24)? as *const u8 };
 
     // ── 2. Get a mutable reference to the scratch buffer ─────────
     //
