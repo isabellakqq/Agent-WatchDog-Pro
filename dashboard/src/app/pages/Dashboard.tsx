@@ -66,10 +66,10 @@ export function Dashboard() {
           prev.map((alert) =>
             alert.id === id
               ? {
-                  ...alert,
-                  status: action === "block" ? ("blocked" as const) : ("ignored" as const),
-                  actionTimestamp: new Date().toISOString(),
-                }
+                ...alert,
+                status: action === "block" ? ("blocked" as const) : ("ignored" as const),
+                actionTimestamp: new Date().toISOString(),
+              }
               : alert
           )
         );
