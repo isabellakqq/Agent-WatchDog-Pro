@@ -13,9 +13,13 @@
 //! - **CWD resolution**: resolve relative paths via `/proc/<pid>/cwd`
 
 mod api;
+mod audit;
 mod config;
 mod event_store;
 mod path_resolver;
+mod policy;
+mod proxy;
+mod risk;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -37,8 +41,12 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use agent_watchdog_common::FileOpenEvent;
+use audit::AuditStore;
 use config::Config;
 use event_store::{AlertEvent, AlertStatus, EventStore, Severity};
+use policy::PolicyEngine;
+use proxy::ProxyState;
+use risk::RiskEngine;
 
 // ── CLI ──────────────────────────────────────────────────────────
 #[derive(Debug, Parser)]
@@ -110,6 +118,35 @@ async fn main() -> Result<()> {
     tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, router).await {
             warn!("API server error: {:#}", e);
+        }
+    });
+
+    // ── 2b. Start Firewall Proxy server ──────────────────────────
+    let policy_engine = PolicyEngine::new(
+        config.build_policy_rules(),
+        config.parsed_default_action(),
+        config.risk_threshold,
+        config.dry_run,
+    );
+    let risk_engine = RiskEngine::new();
+    let audit_store = AuditStore::shared();
+
+    let proxy_state = Arc::new(ProxyState {
+        policy: policy_engine,
+        risk: risk_engine,
+        audit: audit_store,
+    });
+    let proxy_router = proxy::create_proxy_router(proxy_state);
+
+    let proxy_addr = format!("0.0.0.0:{}", config.firewall_port);
+    let proxy_listener = tokio::net::TcpListener::bind(&proxy_addr)
+        .await
+        .with_context(|| format!("failed to bind firewall proxy to {}", proxy_addr))?;
+    info!("🛡️  Firewall proxy listening on http://{}", proxy_addr);
+
+    tokio::spawn(async move {
+        if let Err(e) = axum::serve(proxy_listener, proxy_router).await {
+            warn!("Firewall proxy error: {:#}", e);
         }
     });
 

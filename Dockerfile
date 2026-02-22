@@ -37,10 +37,10 @@ COPY agent-watchdog-ebpf/src agent-watchdog-ebpf/src
 # Build eBPF (must target x86_64 for the runtime host)
 RUN cd agent-watchdog-ebpf \
     && CARGO_ENCODED_RUSTFLAGS='--cfg=bpf_target_arch="x86_64"' \
-       cargo +nightly build \
-       --target=bpfel-unknown-none \
-       -Z build-std=core \
-       --release
+    cargo +nightly build \
+    --target=bpfel-unknown-none \
+    -Z build-std=core \
+    --release
 
 # ── Stage 2: Build user-space Rust daemon ─────────────────────
 FROM rust:latest AS rust-builder
@@ -93,8 +93,8 @@ FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-       ca-certificates \
-       procps \
+    ca-certificates \
+    procps \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/agent-watchdog

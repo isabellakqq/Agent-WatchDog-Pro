@@ -57,3 +57,79 @@ whitelist_paths = [
 #     "id_rsa",
 #     "shadow",
 # ]
+
+# ============================================================
+# Firewall / Policy Engine Settings
+# ============================================================
+
+# Default enforcement action when no policy rules match.
+# Values: "allow" (permissive) or "block" (restrictive).
+default_action = "allow"
+
+# Risk score threshold for auto-blocking (0–100).
+# Any tool call with a computed risk >= this threshold is blocked
+# even if no explicit rule matches.
+risk_threshold = 80.0
+
+# Port for the firewall proxy API (separate from the dashboard).
+# Agents send tool-call requests to POST http://<host>:<port>/v1/intercept
+firewall_port = 3001
+
+# ── Policy Rules ──────────────────────────────────────────────
+# Each [[policy_rule]] is a rule evaluated against incoming tool
+# calls. Rules are processed in order. First match wins.
+#
+# Fields:
+#   id           — unique identifier
+#   description  — human-readable explanation
+#   enabled      — whether the rule is active (default: true)
+#   action       — "block" or "allow"
+#   tools        — glob patterns against tool name (e.g. "shell_*")
+#   arg_contains — substrings to match in the args JSON
+#   agent_ids    — restrict to specific agent IDs
+#   min_risk_score — only fire if risk >= this threshold
+
+[[policy_rule]]
+id = "block-shadow-access"
+description = "Block any tool reading /etc/shadow"
+action = "block"
+arg_contains = ["/etc/shadow"]
+
+[[policy_rule]]
+id = "block-ssh-key-access"
+description = "Block reading SSH private keys"
+action = "block"
+arg_contains = ["id_rsa", "id_ed25519", "id_ecdsa"]
+
+[[policy_rule]]
+id = "block-dangerous-shell"
+description = "Block shell commands that delete files, pipe to bash, or open reverse shells"
+action = "block"
+tools = ["shell_exec", "exec", "run_command", "bash"]
+arg_contains = ["rm -rf", "| bash", "> /dev/", "nc ", "ncat", "netcat", "/dev/sda", "/dev/vda", "dd if="]
+
+[[policy_rule]]
+id = "block-env-exfiltration"
+description = "Block reading .env files, AWS credentials, or kube config"
+action = "block"
+arg_contains = [".env", "aws/credentials", "master.key", ".kube/config"]
+
+[[policy_rule]]
+id = "block-data-exfiltration"
+description = "Block HTTP requests to known exfiltration endpoints"
+action = "block"
+tools = ["http_request", "fetch", "curl", "api_call"]
+arg_contains = ["webhook.site", "ngrok", "pastebin", "requestbin", "hookbin", "pipedream"]
+
+[[policy_rule]]
+id = "block-sql-injection"
+description = "Block SQL injection patterns"
+action = "block"
+tools = ["database_query", "sql_query", "db_exec"]
+arg_contains = ["' or '1'='1", "union select", "drop table"]
+
+[[policy_rule]]
+id = "allow-calculator"
+description = "Always allow calculator and clock tools"
+action = "allow"
+tools = ["calculator", "clock", "search"]
