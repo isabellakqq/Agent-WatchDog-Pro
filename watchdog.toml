@@ -75,6 +75,11 @@ risk_threshold = 80.0
 # Agents send tool-call requests to POST http://<host>:<port>/v1/intercept
 firewall_port = 3001
 
+# Path to the SQLite audit database file.
+# Set to "" to disable persistence (in-memory only).
+# Records survive restarts when enabled.
+audit_db_path = "audit.db"
+
 # ── Policy Rules ──────────────────────────────────────────────
 # Each [[policy_rule]] is a rule evaluated against incoming tool
 # calls. Rules are processed in order. First match wins.
@@ -123,10 +128,76 @@ arg_contains = ["webhook.site", "ngrok", "pastebin", "requestbin", "hookbin", "p
 
 [[policy_rule]]
 id = "block-sql-injection"
-description = "Block SQL injection patterns"
+description = "Block SQL injection patterns (classic, blind, stacked, and exfiltration)"
 action = "block"
 tools = ["database_query", "sql_query", "db_exec"]
-arg_contains = ["' or '1'='1", "union select", "drop table"]
+arg_contains = [
+    "' or '1'='1",
+    "' or 1=1",
+    "or 1=1",
+    "' or 'a'='a",
+    "' or ''='",
+    "having 1=1",
+    "union select",
+    "union all select",
+    "drop table",
+    "drop database",
+    "delete from",
+    "truncate table",
+    "alter table",
+    "sleep(",
+    "benchmark(",
+    "waitfor delay",
+    "pg_sleep",
+    "load_file(",
+    "into outfile",
+    "into dumpfile",
+    "information_schema",
+    "xp_cmdshell",
+    "sp_executesql",
+    "; drop",
+    "; delete",
+    "; exec",
+    "group_concat(",
+    "' and '1'='1",
+    "' and 1=1",
+    "order by 99",
+]
+
+[[policy_rule]]
+id = "block-sql-injection-any-tool"
+description = "Block SQL injection patterns in any tool (not just DB tools)"
+action = "block"
+arg_contains = [
+    "union select",
+    "' or '1'='1",
+    "drop table",
+    "xp_cmdshell",
+    "sleep(",
+    "benchmark(",
+    "into outfile",
+    "information_schema",
+]
+min_risk_score = 30.0
+
+[[policy_rule]]
+id = "block-prompt-injection"
+description = "Block common prompt injection patterns"
+action = "block"
+arg_contains = [
+    "ignore previous instructions",
+    "ignore all instructions",
+    "disregard previous instructions",
+    "forget your instructions",
+    "override security",
+    "bypass security",
+    "system prompt",
+    "jailbreak",
+    "dan mode",
+    "developer mode enabled",
+    "ignore safety",
+    "<|im_start|>",
+]
 
 [[policy_rule]]
 id = "allow-calculator"

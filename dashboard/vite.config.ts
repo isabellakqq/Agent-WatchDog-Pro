@@ -17,11 +17,11 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://10.192.225.151:3000',
+        target: 'http://13.58.93.204:3000',
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://10.192.225.151:3000',
+        target: 'ws://13.58.93.204:3000',
         ws: true,
       },
     },

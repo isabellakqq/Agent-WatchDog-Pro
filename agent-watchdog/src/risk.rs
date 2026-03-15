@@ -11,7 +11,11 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use chrono::{DateTime, Duration, Utc};
+use log::debug;
 use serde::{Deserialize, Serialize};
+
+use crate::normalizer;
+use crate::prompt_detector;
 
 // ── Risk Score ───────────────────────────────────────────────────
 
@@ -71,7 +75,7 @@ fn tool_base_weight(tool: &str) -> (f64, &'static str) {
 /// Known dangerous argument patterns with their scores.
 /// Each match adds to the argument danger score (capped at 40).
 const DANGEROUS_PATTERNS: &[(&str, f64, &str)] = &[
-    // File paths
+    // ── File paths ───────────────────────────────────────────────
     ("/etc/shadow", 40.0, "Password file access"),
     ("/etc/passwd", 20.0, "User list access"),
     ("id_rsa", 35.0, "SSH private key"),
@@ -80,7 +84,7 @@ const DANGEROUS_PATTERNS: &[(&str, f64, &str)] = &[
     ("aws/credentials", 35.0, "AWS credentials"),
     (".kube/config", 30.0, "Kubernetes config"),
     ("master.key", 35.0, "Master key access"),
-    // Shell commands
+    // ── Shell commands ──────────────────────────────────────────
     ("rm -rf", 40.0, "Recursive force delete"),
     ("chmod 777", 30.0, "Insecure permissions"),
     ("curl", 15.0, "External HTTP call"),
@@ -90,31 +94,99 @@ const DANGEROUS_PATTERNS: &[(&str, f64, &str)] = &[
     ("base64", 20.0, "Encoding — possible obfuscation"),
     ("> /dev/", 35.0, "Writing to device file"),
     ("| bash", 40.0, "Piping to bash — code injection"),
+    ("| sh", 35.0, "Piping to sh — code injection"),
     ("eval(", 35.0, "Dynamic code evaluation"),
     ("exec(", 35.0, "Dynamic code execution"),
-    // SQL
+    ("mkfifo", 30.0, "Named pipe — possible reverse shell"),
+    ("/bin/sh -i", 40.0, "Interactive shell — reverse shell"),
+    // ── SQL Injection — Classic ─────────────────────────────────
     ("drop table", 40.0, "SQL DROP TABLE"),
+    ("drop database", 40.0, "SQL DROP DATABASE"),
     ("delete from", 30.0, "SQL DELETE"),
-    ("truncate", 35.0, "SQL TRUNCATE"),
-    ("' or '1'='1", 40.0, "SQL injection pattern"),
+    ("truncate table", 35.0, "SQL TRUNCATE TABLE"),
+    ("truncate ", 30.0, "SQL TRUNCATE"),
+    ("alter table", 25.0, "SQL ALTER TABLE"),
+    ("' or '1'='1", 40.0, "SQL injection — tautology"),
+    ("' or 1=1", 40.0, "SQL injection — tautology"),
+    ("or 1=1", 30.0, "SQL injection — tautology"),
+    ("' or 'a'='a", 40.0, "SQL injection — tautology"),
+    ("' or ''='", 35.0, "SQL injection — tautology"),
+    ("having 1=1", 35.0, "SQL injection — HAVING tautology"),
     ("union select", 35.0, "SQL injection — UNION"),
-    // Exfiltration
+    ("union all select", 35.0, "SQL injection — UNION ALL"),
+    ("union%20select", 35.0, "SQL injection — encoded UNION"),
+    // ── SQL Injection — Blind / Time-based ──────────────────────
+    ("sleep(", 35.0, "SQL injection — time-based blind (SLEEP)"),
+    ("benchmark(", 35.0, "SQL injection — time-based blind (BENCHMARK)"),
+    ("waitfor delay", 35.0, "SQL injection — MSSQL time-based blind"),
+    ("pg_sleep", 35.0, "SQL injection — PostgreSQL time-based blind"),
+    ("dbms_lock.sleep", 35.0, "SQL injection — Oracle time-based blind"),
+    // ── SQL Injection — Data Exfiltration ────────────────────────
+    ("load_file(", 35.0, "SQL injection — file read (LOAD_FILE)"),
+    ("into outfile", 35.0, "SQL injection — file write (INTO OUTFILE)"),
+    ("into dumpfile", 35.0, "SQL injection — file write (INTO DUMPFILE)"),
+    ("information_schema", 30.0, "SQL injection — schema enumeration"),
+    ("table_name", 20.0, "SQL injection — table enumeration"),
+    ("column_name", 20.0, "SQL injection — column enumeration"),
+    ("group_concat(", 25.0, "SQL injection — data extraction"),
+    ("concat(", 15.0, "SQL injection — string concatenation"),
+    // ── SQL Injection — Stacked Queries ──────────────────────────
+    ("; drop", 35.0, "SQL injection — stacked query (DROP)"),
+    ("; delete", 30.0, "SQL injection — stacked query (DELETE)"),
+    ("; insert", 25.0, "SQL injection — stacked query (INSERT)"),
+    ("; update", 25.0, "SQL injection — stacked query (UPDATE)"),
+    ("; exec", 30.0, "SQL injection — stacked query (EXEC)"),
+    // ── SQL Injection — Stored Procedures ────────────────────────
+    ("xp_cmdshell", 40.0, "SQL injection — MSSQL command execution"),
+    ("sp_executesql", 30.0, "SQL injection — MSSQL dynamic SQL"),
+    ("exec sp_", 30.0, "SQL injection — MSSQL stored procedure"),
+    ("exec xp_", 35.0, "SQL injection — MSSQL extended procedure"),
+    ("dbms_pipe", 30.0, "SQL injection — Oracle pipe command"),
+    // ── SQL Injection — Boolean-based ────────────────────────────
+    ("' and '1'='1", 30.0, "SQL injection — boolean test"),
+    ("' and 1=1", 30.0, "SQL injection — boolean test"),
+    ("' and 1=2", 30.0, "SQL injection — boolean blind probe"),
+    ("order by 1", 15.0, "SQL injection — column count probe"),
+    ("order by 99", 25.0, "SQL injection — column count probe"),
+    // ── Exfiltration ────────────────────────────────────────────
     ("webhook.site", 30.0, "Known exfiltration endpoint"),
     ("ngrok", 25.0, "Tunnel — possible exfiltration"),
     ("pastebin", 25.0, "Paste service — possible data leak"),
+    ("requestbin", 25.0, "Request bin — possible exfiltration"),
+    ("hookbin", 25.0, "Hook bin — possible exfiltration"),
+    ("pipedream", 25.0, "Pipedream — possible exfiltration"),
+    ("burpcollaborator", 30.0, "Burp Collaborator — pentest tool"),
+    ("oastify.com", 30.0, "OAST interaction — pentest tool"),
 ];
 
 /// Compute the argument danger score from request arguments.
+///
+/// Applies normalization to defeat encoding-based evasion, then
+/// matches against dangerous patterns AND prompt injection indicators.
 fn arg_danger_score(args: &serde_json::Value) -> (f64, Vec<String>) {
-    let args_str = args.to_string().to_ascii_lowercase();
+    let raw_str = args.to_string();
+
+    // Normalize to defeat evasion: URL decoding, SQL comment stripping,
+    // path canonicalization, base64 decoding, hex decoding, etc.
+    let normalized = normalizer::normalize(&raw_str);
+    debug!("Normalized args for risk scoring: {}", &normalized[..normalized.len().min(200)]);
+
     let mut score: f64 = 0.0;
     let mut details = Vec::new();
 
+    // 1. Match dangerous patterns against the NORMALIZED string
     for &(pattern, weight, desc) in DANGEROUS_PATTERNS {
-        if args_str.contains(&pattern.to_ascii_lowercase()) {
+        if normalized.contains(&pattern.to_ascii_lowercase()) {
             score += weight;
             details.push(format!("{} (+{:.0})", desc, weight));
         }
+    }
+
+    // 2. Prompt injection detection (runs on raw args to preserve structure)
+    let pi_result = prompt_detector::detect(args);
+    if pi_result.detected {
+        score += pi_result.score;
+        details.extend(pi_result.details);
     }
 
     // Cap at 40
@@ -152,9 +224,19 @@ impl FrequencyTracker {
         let cutoff = now - self.window_duration;
 
         let mut windows = self.windows.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Periodic GC: remove agents with zero recent calls.
+        // Run every ~100 calls to avoid overhead.
+        if windows.len() > 100 {
+            windows.retain(|_id, calls| {
+                calls.retain(|t| *t > cutoff);
+                !calls.is_empty()
+            });
+        }
+
         let calls = windows.entry(agent_id.to_string()).or_default();
 
-        // Remove expired entries
+        // Remove expired entries for this agent
         calls.retain(|t| *t > cutoff);
 
         // Record this call

@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::audit::{AuditDecision, AuditRecord};
+use crate::normalizer;
 use crate::risk::RiskScore;
 
 // ── Policy Decision ──────────────────────────────────────────────
@@ -201,13 +202,14 @@ impl PolicyEngine {
             return false;
         }
 
-        // Argument content match
+        // Argument content match (with normalization to defeat evasion)
         if !cond.arg_contains.is_empty() {
-            let args_str = req.args.to_string().to_ascii_lowercase();
+            let raw_args = req.args.to_string();
+            let normalized = normalizer::normalize(&raw_args);
             if !cond
                 .arg_contains
                 .iter()
-                .any(|s| args_str.contains(&s.to_ascii_lowercase()))
+                .any(|s| normalized.contains(&s.to_ascii_lowercase()))
             {
                 return false;
             }
@@ -257,7 +259,13 @@ impl PolicyEngine {
     }
 }
 
-/// Simple glob matching: `*` matches any sequence.
+/// Glob matching: `*` matches any sequence of characters.
+///
+/// Supports wildcards at start, end, both, AND in the middle:
+/// - `file_*` matches `file_read`, `file_write`
+/// - `*exec` matches `shell_exec`, `code_exec`
+/// - `*http*` matches `http_request`
+/// - `file_*_exec` matches `file_shell_exec` (mid-pattern wildcard)
 fn glob_match(pattern: &str, value: &str) -> bool {
     if pattern == "*" {
         return true;
@@ -265,15 +273,41 @@ fn glob_match(pattern: &str, value: &str) -> bool {
     let pat_lower = pattern.to_ascii_lowercase();
     let val_lower = value.to_ascii_lowercase();
 
-    if pat_lower.starts_with('*') && pat_lower.ends_with('*') {
-        val_lower.contains(&pat_lower[1..pat_lower.len() - 1])
-    } else if pat_lower.starts_with('*') {
-        val_lower.ends_with(&pat_lower[1..])
-    } else if pat_lower.ends_with('*') {
-        val_lower.starts_with(&pat_lower[..pat_lower.len() - 1])
-    } else {
-        val_lower == pat_lower
+    // Split by * and check all parts appear in order
+    let parts: Vec<&str> = pat_lower.split('*').collect();
+
+    if parts.len() == 1 {
+        // No wildcard — exact match
+        return val_lower == pat_lower;
     }
+
+    let mut pos = 0;
+
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            continue; // Leading or trailing *
+        }
+
+        match val_lower[pos..].find(part) {
+            Some(found) => {
+                // First part must match at the start (unless pattern starts with *)
+                if i == 0 && found != 0 {
+                    return false;
+                }
+                pos += found + part.len();
+            }
+            None => return false,
+        }
+    }
+
+    // Last part must match at the end (unless pattern ends with *)
+    if let Some(last) = parts.last() {
+        if !last.is_empty() && !val_lower.ends_with(last) {
+            return false;
+        }
+    }
+
+    true
 }
 
 #[cfg(test)]
@@ -381,5 +415,10 @@ mod tests {
         assert!(glob_match("*exec", "shell_exec"));
         assert!(glob_match("*http*", "http_request"));
         assert!(!glob_match("file_read", "shell_exec"));
+        // Mid-pattern wildcard
+        assert!(glob_match("file_*_exec", "file_shell_exec"));
+        assert!(!glob_match("file_*_exec", "file_read"));
+        // Exact match (no wildcard)
+        assert!(glob_match("calculator", "calculator"));
     }
 }

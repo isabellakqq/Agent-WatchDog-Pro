@@ -3,7 +3,7 @@
 //! Stores recent `AlertEvent`s in a `VecDeque` with a configurable
 //! capacity.  Thread-safe via `Arc<RwLock<...>>`.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -78,9 +78,11 @@ pub struct DashboardStats {
 /// Thread-safe handle to the event store.
 pub type SharedEventStore = Arc<RwLock<EventStore>>;
 
-/// In-memory ring buffer of alert events.
+/// In-memory ring buffer of alert events with O(1) lookup by ID.
 pub struct EventStore {
     events: VecDeque<AlertEvent>,
+    /// Maps event ID → index in the VecDeque for O(1) lookups.
+    index: HashMap<String, usize>,
     /// Lifetime counter of blocked processes.
     total_blocked: usize,
     /// Lifetime counter of ignored alerts.
@@ -92,6 +94,7 @@ impl EventStore {
     pub fn new() -> Self {
         Self {
             events: VecDeque::with_capacity(MAX_EVENTS),
+            index: HashMap::with_capacity(MAX_EVENTS),
             total_blocked: 0,
             total_ignored: 0,
         }
@@ -105,8 +108,16 @@ impl EventStore {
     /// Push a new alert event, evicting the oldest if at capacity.
     pub fn push(&mut self, event: AlertEvent) {
         if self.events.len() >= MAX_EVENTS {
-            self.events.pop_front();
+            if let Some(evicted) = self.events.pop_front() {
+                self.index.remove(&evicted.id);
+                // Decrement all indices by 1 since front was removed
+                for val in self.index.values_mut() {
+                    *val = val.saturating_sub(1);
+                }
+            }
         }
+        let idx = self.events.len();
+        self.index.insert(event.id.clone(), idx);
         self.events.push_back(event);
     }
 
@@ -127,25 +138,29 @@ impl EventStore {
 
     /// Mark an event as blocked and increment the counter.
     /// Returns `true` if the event was found and updated.
+    /// Uses O(1) HashMap lookup instead of linear scan.
     pub fn block_event(&mut self, id: &str) -> Option<AlertEvent> {
-        if let Some(ev) = self.events.iter_mut().find(|e| e.id == id) {
-            ev.status = AlertStatus::Blocked;
-            self.total_blocked += 1;
-            Some(ev.clone())
-        } else {
-            None
+        if let Some(&idx) = self.index.get(id) {
+            if let Some(ev) = self.events.get_mut(idx) {
+                ev.status = AlertStatus::Blocked;
+                self.total_blocked += 1;
+                return Some(ev.clone());
+            }
         }
+        None
     }
 
     /// Mark an event as ignored (false positive).
+    /// Uses O(1) HashMap lookup instead of linear scan.
     pub fn ignore_event(&mut self, id: &str) -> Option<AlertEvent> {
-        if let Some(ev) = self.events.iter_mut().find(|e| e.id == id) {
-            ev.status = AlertStatus::Ignored;
-            self.total_ignored += 1;
-            Some(ev.clone())
-        } else {
-            None
+        if let Some(&idx) = self.index.get(id) {
+            if let Some(ev) = self.events.get_mut(idx) {
+                ev.status = AlertStatus::Ignored;
+                self.total_ignored += 1;
+                return Some(ev.clone());
+            }
         }
+        None
     }
 
     /// Compute dashboard statistics.

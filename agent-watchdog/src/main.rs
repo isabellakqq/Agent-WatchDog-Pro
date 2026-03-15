@@ -14,10 +14,13 @@
 
 mod api;
 mod audit;
+mod audit_db;
 mod config;
 mod event_store;
+mod normalizer;
 mod path_resolver;
 mod policy;
+mod prompt_detector;
 mod proxy;
 mod risk;
 
@@ -42,6 +45,7 @@ use uuid::Uuid;
 
 use agent_watchdog_common::FileOpenEvent;
 use audit::AuditStore;
+use audit_db::AuditDb;
 use config::Config;
 use event_store::{AlertEvent, AlertStatus, EventStore, Severity};
 use policy::PolicyEngine;
@@ -129,7 +133,23 @@ async fn main() -> Result<()> {
         config.dry_run,
     );
     let risk_engine = RiskEngine::new();
-    let audit_store = AuditStore::shared();
+
+    // Initialize SQLite-backed audit store (falls back to in-memory if DB fails)
+    let audit_store = if config.audit_db_path.is_empty() {
+        info!("📦  Audit persistence disabled (in-memory only)");
+        AuditStore::shared()
+    } else {
+        match AuditDb::open(std::path::Path::new(&config.audit_db_path)) {
+            Ok(db) => {
+                info!("📦  Audit persistence enabled ({})", config.audit_db_path);
+                AuditStore::shared_with_persistence(db)
+            }
+            Err(e) => {
+                warn!("⚠️  Failed to open audit database: {:#}. Falling back to in-memory only.", e);
+                AuditStore::shared()
+            }
+        }
+    };
 
     let proxy_state = Arc::new(ProxyState {
         policy: policy_engine,

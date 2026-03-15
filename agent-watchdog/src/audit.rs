@@ -10,9 +10,11 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use log::warn;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
+use crate::audit_db::AuditDb;
 use crate::risk::RiskScore;
 
 /// Maximum audit records kept in memory.
@@ -68,26 +70,67 @@ pub struct AuditRecord {
 /// Thread-safe handle to the audit store.
 pub type SharedAuditStore = Arc<RwLock<AuditStore>>;
 
-/// In-memory ring buffer of audit records.
+/// In-memory ring buffer of audit records with optional SQLite persistence.
 pub struct AuditStore {
     records: VecDeque<AuditRecord>,
+    /// Optional SQLite persistence layer.
+    db: Option<AuditDb>,
 }
 
 impl AuditStore {
-    /// Create a new empty audit store.
+    /// Create a new empty audit store (in-memory only).
     pub fn new() -> Self {
         Self {
             records: VecDeque::with_capacity(MAX_AUDIT_RECORDS),
+            db: None,
         }
     }
 
-    /// Create a thread-safe shared handle.
+    /// Create an audit store with SQLite persistence.
+    ///
+    /// On creation, loads recent records from the database to warm
+    /// the in-memory cache.
+    pub fn with_persistence(db: AuditDb) -> Self {
+        let mut records = VecDeque::with_capacity(MAX_AUDIT_RECORDS);
+
+        // Warm cache from SQLite
+        match db.load_recent(MAX_AUDIT_RECORDS) {
+            Ok(loaded) => {
+                for record in loaded {
+                    records.push_back(record);
+                }
+            }
+            Err(e) => {
+                warn!("Failed to load audit records from SQLite: {:#}", e);
+            }
+        }
+
+        Self {
+            records,
+            db: Some(db),
+        }
+    }
+
+    /// Create a thread-safe shared handle (in-memory only).
     pub fn shared() -> SharedAuditStore {
         Arc::new(RwLock::new(Self::new()))
     }
 
-    /// Record an audit entry.
+    /// Create a thread-safe shared handle with SQLite persistence.
+    pub fn shared_with_persistence(db: AuditDb) -> SharedAuditStore {
+        Arc::new(RwLock::new(Self::with_persistence(db)))
+    }
+
+    /// Record an audit entry (writes to both memory and SQLite).
     pub fn record(&mut self, entry: AuditRecord) {
+        // Persist to SQLite first (if configured)
+        if let Some(ref db) = self.db {
+            if let Err(e) = db.insert(&entry) {
+                warn!("Failed to persist audit record to SQLite: {:#}", e);
+            }
+        }
+
+        // Then write to in-memory ring buffer
         if self.records.len() >= MAX_AUDIT_RECORDS {
             self.records.pop_front();
         }

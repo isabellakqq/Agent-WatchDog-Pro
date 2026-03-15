@@ -46,6 +46,10 @@ pub struct Config {
     /// Firewall proxy port (separate from dashboard API).
     pub firewall_port: u16,
 
+    /// Path to the SQLite audit database file.
+    /// Set to empty string to disable persistence (in-memory only).
+    pub audit_db_path: String,
+
     /// Policy rules loaded from the TOML config.
     #[serde(default, rename = "policy_rule")]
     pub policy_rules: Vec<PolicyRuleConfig>,
@@ -86,6 +90,7 @@ impl Default for Config {
             default_action: "allow".into(),
             risk_threshold: 80.0,
             firewall_port: 3001,
+            audit_db_path: "audit.db".into(),
             policy_rules: Vec::new(),
         }
     }
@@ -122,6 +127,7 @@ impl Config {
         info!("    default_action = {}", config.default_action);
         info!("    risk_threshold = {:.1}", config.risk_threshold);
         info!("    firewall_port = {}", config.firewall_port);
+        info!("    audit_db_path = {}", config.audit_db_path);
         info!("    policy_rules = {} loaded", config.policy_rules.len());
 
         Ok(config)
