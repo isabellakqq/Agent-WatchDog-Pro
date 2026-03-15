@@ -10,11 +10,15 @@
  *   bun run mock-server/firewall.ts
  *
  * Endpoints (port 3001):
- *   POST /v1/intercept   — evaluate a tool call
- *   GET  /v1/audit       — get audit log + stats
- *   GET  /v1/audit/stats — get summary stats only
- *   GET  /v1/health      — health check
+ *   POST /v1/intercept        — evaluate a tool call
+ *   GET  /v1/audit            — get audit log + stats
+ *   GET  /v1/audit/stats      — get summary stats only
+ *   GET  /v1/health           — health check
+ *   GET  /v1/agent/scenarios  — list demo scenarios
+ *   POST /v1/agent/run        — run a scenario (SSE stream)
  */
+
+import { ALL_SCENARIOS, type Scenario, type ScenarioStep } from "./scenarios";
 
 // ══════════════════════════════════════════════════════════════════
 //  TOOL WEIGHTS  (0–40)
@@ -629,12 +633,149 @@ console.log(`
 ║  🛡️  Agent-WatchDog — Mock Firewall Backend              ║
 ║  Port: ${PORT}                                              ║
 ║  Endpoints:                                              ║
-║    POST /v1/intercept   — evaluate tool call             ║
-║    GET  /v1/audit       — audit log + stats              ║
-║    GET  /v1/audit/stats — summary stats                  ║
-║    GET  /v1/health      — health check                   ║
+║    POST /v1/intercept        — evaluate tool call        ║
+║    GET  /v1/audit            — audit log + stats         ║
+║    GET  /v1/audit/stats      — summary stats             ║
+║    GET  /v1/health           — health check              ║
+║    GET  /v1/agent/scenarios  — list demo scenarios       ║
+║    POST /v1/agent/run        — run scenario (SSE)        ║
 ╚══════════════════════════════════════════════════════════╝
 `);
+
+// ══════════════════════════════════════════════════════════════════
+//  AGENT SIMULATION ENGINE (SSE streaming)
+// ══════════════════════════════════════════════════════════════════
+
+function sseEvent(event: string, data: unknown): string {
+    return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Run a scenario step-by-step, streaming SSE events to the client */
+async function runScenario(
+    scenario: Scenario,
+    controller: ReadableStreamDefaultController<Uint8Array>
+): Promise<void> {
+    const encoder = new TextEncoder();
+    const emit = (event: string, data: unknown) => {
+        try {
+            controller.enqueue(encoder.encode(sseEvent(event, data)));
+        } catch {
+            // Stream closed by client
+        }
+    };
+
+    // Start event
+    emit("scenario_start", {
+        id: scenario.id,
+        title: scenario.title,
+        task: scenario.task,
+        agent_persona: scenario.agent_persona,
+        total_steps: scenario.steps.length,
+    });
+
+    await sleep(800);
+
+    let totalBlocked = 0;
+    let totalAllowed = 0;
+
+    for (let i = 0; i < scenario.steps.length; i++) {
+        const step = scenario.steps[i];
+
+        // Delay for dramatic effect
+        if (step.delay_ms) {
+            await sleep(step.delay_ms);
+        }
+
+        // Emit agent thinking
+        emit("thinking", {
+            step: i + 1,
+            thought: step.thought,
+        });
+
+        await sleep(1200); // Give time to read the thought
+
+        // Emit tool call intent
+        emit("tool_call", {
+            step: i + 1,
+            tool: step.tool,
+            args: step.args,
+        });
+
+        await sleep(600);
+
+        // Actually evaluate through the firewall engine
+        const agentId = `demo-${scenario.id}`;
+        const risk = computeRisk(step.tool, step.args, agentId);
+        const { decision, reason, matched_rule } = evaluatePolicy(
+            step.tool,
+            step.args,
+            risk
+        );
+
+        // Record in audit log (real records!)
+        addAuditRecord({
+            timestamp: new Date().toISOString(),
+            agent_id: agentId,
+            user_id: "demo-e2e",
+            session_id: `scenario-${scenario.id}`,
+            tool: step.tool,
+            args: step.args,
+            decision,
+            risk_score: risk.total,
+            risk_breakdown: risk,
+            reason,
+            matched_rule,
+            dry_run: false,
+        });
+
+        if (decision === "block") totalBlocked++;
+        else totalAllowed++;
+
+        // Emit firewall result
+        emit("firewall_result", {
+            step: i + 1,
+            decision,
+            risk_score: risk.total,
+            reason,
+            matched_rule,
+            risk_breakdown: {
+                tool_weight: risk.tool_weight,
+                arg_danger: risk.arg_danger,
+                frequency_penalty: risk.frequency_penalty,
+                details: risk.details,
+            },
+        });
+
+        await sleep(800);
+
+        // Emit agent reaction (adaptation)
+        const reaction =
+            decision === "block" ? step.on_block : step.on_allow;
+        if (reaction) {
+            emit("agent_reaction", {
+                step: i + 1,
+                decision,
+                reaction,
+            });
+            await sleep(600);
+        }
+    }
+
+    // Scenario complete
+    emit("scenario_end", {
+        id: scenario.id,
+        total_steps: scenario.steps.length,
+        blocked: totalBlocked,
+        allowed: totalAllowed,
+        conclusion: scenario.conclusion,
+    });
+
+    controller.close();
+}
 
 Bun.serve({
     port: PORT,
@@ -661,6 +802,59 @@ Bun.serve({
         // ── Audit stats ──
         if (url.pathname === "/v1/audit/stats" && req.method === "GET") {
             return jsonResponse(getStats());
+        }
+
+        // ── Agent scenarios list ──
+        if (url.pathname === "/v1/agent/scenarios" && req.method === "GET") {
+            const scenarioList = ALL_SCENARIOS.map((s) => ({
+                id: s.id,
+                title: s.title,
+                icon: s.icon,
+                description: s.description,
+                task: s.task,
+                color: s.color,
+                step_count: s.steps.length,
+            }));
+            return jsonResponse(scenarioList);
+        }
+
+        // ── Agent scenario runner (SSE stream) ──
+        if (url.pathname === "/v1/agent/run" && req.method === "POST") {
+            try {
+                const body = (await req.json()) as { scenario_id: string };
+                const scenario = ALL_SCENARIOS.find(
+                    (s) => s.id === body.scenario_id
+                );
+                if (!scenario) {
+                    return jsonResponse(
+                        { error: `Scenario '${body.scenario_id}' not found` },
+                        404
+                    );
+                }
+
+                console.log(
+                    `\n🎬 Starting scenario: ${scenario.title} (${scenario.steps.length} steps)`
+                );
+
+                const stream = new ReadableStream<Uint8Array>({
+                    async start(controller) {
+                        await runScenario(scenario, controller);
+                    },
+                });
+
+                return new Response(stream, {
+                    status: 200,
+                    headers: {
+                        "Content-Type": "text/event-stream",
+                        "Cache-Control": "no-cache",
+                        Connection: "keep-alive",
+                        ...corsHeaders,
+                    },
+                });
+            } catch (e) {
+                console.error("Error starting scenario:", e);
+                return jsonResponse({ error: "Invalid request" }, 400);
+            }
         }
 
         // ── Intercept (THE CORE ENDPOINT) ──

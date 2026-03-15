@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation } from "react-router";
-import { Shield, Flame, Activity, Settings, List } from "lucide-react";
+import { Shield, Flame, Activity, Settings, List, Bot } from "lucide-react";
 import { cn } from "./ui/utils";
 
 export function Layout() {
@@ -9,6 +9,7 @@ export function Layout() {
     { path: "/", label: "监控面板", icon: Activity },
     { path: "/events", label: "事件历史", icon: List },
     { path: "/firewall", label: "防火墙", icon: Flame },
+    { path: "/agent-demo", label: "Agent 对抗", icon: Bot },
     { path: "/processes", label: "进程监控", icon: Shield },
     { path: "/configuration", label: "配置管理", icon: Settings },
   ];
