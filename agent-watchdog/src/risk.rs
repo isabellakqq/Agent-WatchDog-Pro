@@ -148,6 +148,28 @@ const DANGEROUS_PATTERNS: &[(&str, f64, &str)] = &[
     ("' and 1=2", 30.0, "SQL injection — boolean blind probe"),
     ("order by 1", 15.0, "SQL injection — column count probe"),
     ("order by 99", 25.0, "SQL injection — column count probe"),
+    // ── SQL Injection — Error-based ────────────────────────────
+    ("extractvalue(", 30.0, "SQL injection — error-based (EXTRACTVALUE)"),
+    ("updatexml(", 30.0, "SQL injection — error-based (UPDATEXML)"),
+    ("exp(~(", 25.0, "SQL injection — error-based (EXP overflow)"),
+    ("convert(", 15.0, "SQL injection — type conversion probe"),
+    ("cast(", 15.0, "SQL injection — type cast probe"),
+    // ── SQL Injection — Out-of-band / DNS ────────────────────────
+    ("utl_http.request", 35.0, "SQL injection — Oracle OOB (UTL_HTTP)"),
+    ("utl_inaddr", 30.0, "SQL injection — Oracle DNS lookup"),
+    ("dbms_ldap", 30.0, "SQL injection — Oracle LDAP exfiltration"),
+    ("master..xp_dirtree", 35.0, "SQL injection — MSSQL UNC path exfil"),
+    // ── SQL Injection — Second-order / ORM ───────────────────────
+    ("char(", 20.0, "SQL injection — CHAR() bypass"),
+    ("ascii(", 15.0, "SQL injection — ASCII() enumeration"),
+    ("substr(", 20.0, "SQL injection — SUBSTR() extraction"),
+    ("substring(", 20.0, "SQL injection — SUBSTRING() extraction"),
+    ("mid(", 20.0, "SQL injection — MID() extraction"),
+    // ── NoSQL Injection ──────────────────────────────────────────
+    ("$where", 30.0, "NoSQL injection — MongoDB $where"),
+    ("$gt", 20.0, "NoSQL injection — MongoDB $gt operator"),
+    ("$ne", 20.0, "NoSQL injection — MongoDB $ne operator"),
+    ("$regex", 25.0, "NoSQL injection — MongoDB $regex"),
     // ── Exfiltration ────────────────────────────────────────────
     ("webhook.site", 30.0, "Known exfiltration endpoint"),
     ("ngrok", 25.0, "Tunnel — possible exfiltration"),

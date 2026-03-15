@@ -24,6 +24,10 @@ export default defineConfig({
         target: 'ws://13.58.93.204:3000',
         ws: true,
       },
+      '/v1': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+      },
     },
   },
   assetsInclude: ['**/*.svg', '**/*.csv'],

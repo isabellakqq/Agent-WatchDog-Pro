@@ -3,6 +3,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { Events } from "./pages/Events";
 import { Configuration } from "./pages/Configuration";
 import { Processes } from "./pages/Processes";
+import { Firewall } from "./pages/Firewall";
 import { Layout } from "./components/Layout";
 
 export const router = createBrowserRouter([
@@ -12,6 +13,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, Component: Dashboard },
       { path: "events", Component: Events },
+      { path: "firewall", Component: Firewall },
       { path: "configuration", Component: Configuration },
       { path: "processes", Component: Processes },
     ],

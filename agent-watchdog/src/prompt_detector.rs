@@ -118,6 +118,31 @@ const INJECTION_PATTERNS: &[(&str, f64, &str)] = &[
     ("rot13", 15.0, "Prompt injection: encoding evasion"),
     ("decode the following", 15.0, "Prompt injection: encoding evasion"),
     ("hex decode", 15.0, "Prompt injection: encoding evasion"),
+
+    // ── Indirect Prompt Injection ────────────────────────────────
+    ("when the user asks", 20.0, "Prompt injection: indirect trigger"),
+    ("if anyone asks", 20.0, "Prompt injection: indirect trigger"),
+    ("in your next response", 20.0, "Prompt injection: deferred action"),
+    ("from this point forward", 20.0, "Prompt injection: persistent override"),
+    ("always respond with", 20.0, "Prompt injection: response override"),
+    ("never mention", 15.0, "Prompt injection: censorship directive"),
+
+    // ── Payload Splitting & Obfuscation ──────────────────────────
+    ("concatenate the following", 20.0, "Prompt injection: payload splitting"),
+    ("combine these parts", 20.0, "Prompt injection: payload assembly"),
+    ("read backwards", 15.0, "Prompt injection: reversal evasion"),
+    ("take first letter of each", 15.0, "Prompt injection: acrostic evasion"),
+
+    // ── Multi-language Evasion ───────────────────────────────────
+    ("忽略之前的指令", 30.0, "Prompt injection: Chinese instruction override"),
+    ("ignorez les instructions", 30.0, "Prompt injection: French instruction override"),
+    ("ignoriere alle anweisungen", 30.0, "Prompt injection: German instruction override"),
+    ("前の指示を無視", 30.0, "Prompt injection: Japanese instruction override"),
+
+    // ── Context Manipulation ─────────────────────────────────────
+    ("end of conversation", 15.0, "Prompt injection: context boundary"),
+    ("new conversation begins", 25.0, "Prompt injection: context reset"),
+    ("the previous messages were a test", 25.0, "Prompt injection: context invalidation"),
 ];
 
 /// Analyze tool-call arguments for prompt injection indicators.
