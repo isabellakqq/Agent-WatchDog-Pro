@@ -9,98 +9,105 @@
 // ── Types ────────────────────────────────────────────────────────
 
 export interface FirewallAuditRecord {
-  id: string;
-  timestamp: string;
-  agent_id: string;
-  user_id: string;
-  session_id: string | null;
-  tool: string;
-  args: unknown;
-  decision: "allow" | "block";
-  risk_score: number;
-  risk_breakdown: {
-    total: number;
-    tool_weight: number;
-    arg_danger: number;
-    frequency_penalty: number;
-    details: string[];
-  };
-  reason: string;
-  matched_rule: string | null;
-  dry_run: boolean;
+    id: string;
+    timestamp: string;
+    agent_id: string;
+    user_id: string;
+    session_id: string | null;
+    tool: string;
+    args: unknown;
+    decision: "allow" | "block";
+    risk_score: number;
+    risk_breakdown: {
+        total: number;
+        tool_weight: number;
+        arg_danger: number;
+        frequency_penalty: number;
+        details: string[];
+    };
+    reason: string;
+    matched_rule: string | null;
+    dry_run: boolean;
 }
 
 export interface FirewallAuditStats {
-  total_evaluations: number;
-  total_allowed: number;
-  total_blocked: number;
-  blocked_last_hour: number;
-  avg_risk_score: number;
+    total_evaluations: number;
+    total_allowed: number;
+    total_blocked: number;
+    blocked_last_hour: number;
+    avg_risk_score: number;
 }
 
 export interface FirewallAuditResponse {
-  records: FirewallAuditRecord[];
-  stats: FirewallAuditStats;
+    records: FirewallAuditRecord[];
+    stats: FirewallAuditStats;
 }
 
 export interface InterceptRequest {
-  agent_id: string;
-  user_id: string;
-  tool: string;
-  args: Record<string, unknown>;
-  session_id?: string;
+    agent_id: string;
+    user_id: string;
+    tool: string;
+    args: Record<string, unknown>;
+    session_id?: string;
 }
 
 export interface InterceptResponse {
-  decision: "allow" | "block";
-  allowed: boolean;
-  risk_score: number;
-  risk_breakdown: {
-    total: number;
-    tool_weight: number;
-    arg_danger: number;
-    frequency_penalty: number;
-    details: string[];
-  };
-  reason: string;
-  matched_rule: string | null;
-  dry_run: boolean;
+    decision: "allow" | "block";
+    allowed: boolean;
+    risk_score: number;
+    risk_breakdown: {
+        total: number;
+        tool_weight: number;
+        arg_danger: number;
+        frequency_penalty: number;
+        details: string[];
+    };
+    reason: string;
+    matched_rule: string | null;
+    dry_run: boolean;
 }
 
 // ── REST API ─────────────────────────────────────────────────────
 
+// In dev, talk directly to the mock/real backend via CORS.
+// In prod, the reverse proxy handles routing so we can use relative paths.
+const FIREWALL_BASE =
+    typeof window !== "undefined" && window.location.port === "5173"
+        ? "http://localhost:3001"
+        : "";
+
 export async function fetchFirewallAudit(): Promise<FirewallAuditResponse> {
-  const res = await fetch("/v1/audit");
-  if (!res.ok) throw new Error(`GET /v1/audit failed: ${res.status}`);
-  return res.json();
+    const res = await fetch(`${FIREWALL_BASE}/v1/audit`);
+    if (!res.ok) throw new Error(`GET /v1/audit failed: ${res.status}`);
+    return res.json();
 }
 
 export async function fetchFirewallStats(): Promise<FirewallAuditStats> {
-  const res = await fetch("/v1/audit/stats");
-  if (!res.ok) throw new Error(`GET /v1/audit/stats failed: ${res.status}`);
-  return res.json();
+    const res = await fetch(`${FIREWALL_BASE}/v1/audit/stats`);
+    if (!res.ok) throw new Error(`GET /v1/audit/stats failed: ${res.status}`);
+    return res.json();
 }
 
 export async function sendInterceptRequest(
-  req: InterceptRequest
+    req: InterceptRequest
 ): Promise<InterceptResponse> {
-  const res = await fetch("/v1/intercept", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
-  });
-  // 403 is expected for blocked requests — still parse the body
-  if (!res.ok && res.status !== 403) {
-    throw new Error(`POST /v1/intercept failed: ${res.status}`);
-  }
-  return res.json();
+    const res = await fetch(`${FIREWALL_BASE}/v1/intercept`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(req),
+    });
+    // 403 is expected for blocked requests — still parse the body
+    if (!res.ok && res.status !== 403) {
+        throw new Error(`POST /v1/intercept failed: ${res.status}`);
+    }
+    return res.json();
 }
 
 export async function checkFirewallHealth(): Promise<boolean> {
-  try {
-    const res = await fetch("/v1/health");
-    return res.ok;
-  } catch {
-    return false;
-  }
+    try {
+        const res = await fetch(`${FIREWALL_BASE}/v1/health`);
+        return res.ok;
+    } catch {
+        return false;
+    }
 }
