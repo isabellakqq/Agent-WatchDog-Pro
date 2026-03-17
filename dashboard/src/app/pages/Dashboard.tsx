@@ -3,7 +3,7 @@ import { AlertTriangle, Ban, Eye, Activity, Clock, Shield } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { AlertEvent, SystemStats } from "../types";
+import { AlertEvent, ReliabilityStatus, SystemStats } from "../types";
 import { toast } from "sonner";
 import {
   fetchStats,
@@ -11,6 +11,7 @@ import {
   blockEvent,
   ignoreEvent,
   connectWebSocket,
+  fetchReliabilityStatus,
 } from "../api";
 
 export function Dashboard() {
@@ -22,15 +23,21 @@ export function Dashboard() {
     ignoredAlerts: 0,
     totalAlerts: 0,
   });
+  const [reliability, setReliability] = useState<ReliabilityStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   // ── Fetch data from backend ────────────────────────────────
   const refreshData = useCallback(async () => {
     try {
-      const [s, a] = await Promise.all([fetchStats(), fetchAlerts()]);
+      const [s, a, r] = await Promise.all([
+        fetchStats(),
+        fetchAlerts(),
+        fetchReliabilityStatus(),
+      ]);
       setStats(s);
       setAlerts(a);
+      setReliability(r);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to connect to backend");
@@ -165,6 +172,50 @@ export function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Reliability Panel */}
+      <Card>
+        <CardHeader>
+          <CardTitle>24/7 稳定性面板</CardTitle>
+          <CardDescription>Agent 在线状态、重试和 fallback 兜底状态</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {reliability ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
+              <div className="p-3 rounded border bg-gray-50">
+                <div className="text-gray-500">在线 Agent</div>
+                <div className="text-2xl font-semibold">{reliability.onlineAgents}</div>
+                <div className="text-xs text-gray-500">stale: {reliability.staleAgents}</div>
+              </div>
+              <div className="p-3 rounded border bg-gray-50">
+                <div className="text-gray-500">连续失败</div>
+                <div className="text-2xl font-semibold">{reliability.consecutiveFailures}</div>
+                <div className="text-xs text-gray-500">阈值: {reliability.autoFallbackThreshold}</div>
+              </div>
+              <div className="p-3 rounded border bg-gray-50">
+                <div className="text-gray-500">重试次数</div>
+                <div className="text-2xl font-semibold">{reliability.retryTotal}</div>
+                <div className="text-xs text-gray-500">fallback: {reliability.fallbackActivations}</div>
+              </div>
+              <div className="p-3 rounded border bg-gray-50">
+                <div className="text-gray-500">当前模式</div>
+                <div className={`text-2xl font-semibold ${reliability.mode === "fallback" ? "text-orange-600" : "text-green-600"}`}>
+                  {reliability.mode}
+                </div>
+                <div className="text-xs text-gray-500">uptime: {Math.floor(reliability.uptimeSeconds / 60)} min</div>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-gray-500">正在加载稳定性状态...</p>
+          )}
+
+          {reliability?.lastError && (
+            <div className="mt-4 p-3 rounded border border-orange-200 bg-orange-50 text-sm text-orange-700">
+              最近错误：{reliability.lastError}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Active Alerts */}
       <Card>

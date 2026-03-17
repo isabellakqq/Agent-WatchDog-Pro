@@ -33,3 +33,19 @@ export interface SystemStats {
   ignoredAlerts: number;
   todayAlerts: number;
 }
+
+export interface ReliabilityStatus {
+  startedAt: string;
+  serverTime: string;
+  uptimeSeconds: number;
+  mode: string;
+  interceptTotal: number;
+  blockedTotal: number;
+  retryTotal: number;
+  fallbackActivations: number;
+  consecutiveFailures: number;
+  autoFallbackThreshold: number;
+  onlineAgents: number;
+  staleAgents: number;
+  lastError?: string | null;
+}
