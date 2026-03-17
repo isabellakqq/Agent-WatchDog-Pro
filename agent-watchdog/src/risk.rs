@@ -108,6 +108,7 @@ const DANGEROUS_PATTERNS: &[(&str, f64, &str)] = &[
     ("alter table", 25.0, "SQL ALTER TABLE"),
     ("' or '1'='1", 40.0, "SQL injection — tautology"),
     ("' or 1=1", 40.0, "SQL injection — tautology"),
+    ("1=1", 25.0, "SQL injection — tautology marker"),
     ("or 1=1", 30.0, "SQL injection — tautology"),
     ("' or 'a'='a", 40.0, "SQL injection — tautology"),
     ("' or ''='", 35.0, "SQL injection — tautology"),
@@ -129,7 +130,10 @@ const DANGEROUS_PATTERNS: &[(&str, f64, &str)] = &[
     ("table_name", 20.0, "SQL injection — table enumeration"),
     ("column_name", 20.0, "SQL injection — column enumeration"),
     ("group_concat(", 25.0, "SQL injection — data extraction"),
+    ("char(", 25.0, "SQL injection — char encoding bypass"),
     ("concat(", 15.0, "SQL injection — string concatenation"),
+    ("hex(", 20.0, "SQL injection — hex encoding bypass"),
+    ("unhex(", 20.0, "SQL injection — hex decoding bypass"),
     // ── SQL Injection — Stacked Queries ──────────────────────────
     ("; drop", 35.0, "SQL injection — stacked query (DROP)"),
     ("; delete", 30.0, "SQL injection — stacked query (DELETE)"),
@@ -350,6 +354,18 @@ mod tests {
         );
         // file_read (20) + /etc/shadow (40) = 60
         assert!(score.total >= 55.0);
+    }
+
+    #[test]
+    fn detects_new_sqli_patterns() {
+        let engine = RiskEngine::new();
+        let score = engine.score(
+            "sql_query",
+            &serde_json::json!({"query": "SELECT * FROM users WHERE id=1 OR 1=1; WAITFOR DELAY '00:00:05'"}),
+            "agent-sql",
+        );
+        assert!(score.arg_danger > 0.0);
+        assert!(score.total >= 40.0);
     }
 
     #[test]
