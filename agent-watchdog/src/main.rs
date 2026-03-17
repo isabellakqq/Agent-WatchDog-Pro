@@ -40,7 +40,7 @@ use chrono::Utc;
 use clap::Parser;
 use log::{debug, info, warn};
 use tokio::signal;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, RwLock};
 use uuid::Uuid;
 
 use agent_watchdog_common::FileOpenEvent;
@@ -155,6 +155,7 @@ async fn main() -> Result<()> {
         policy: policy_engine,
         risk: risk_engine,
         audit: audit_store,
+        runtime: Arc::new(RwLock::new(proxy::RuntimeState::new())),
     });
     let proxy_router = proxy::create_proxy_router(proxy_state);
 
