@@ -67,6 +67,8 @@ pub struct RuntimeState {
     pub blocked_total: u64,
     pub retry_total: u64,
     pub fallback_activations: u64,
+    pub consecutive_failures: u64,
+    pub auto_fallback_threshold: u64,
     pub last_error: Option<String>,
     pub heartbeats: HashMap<String, AgentHeartbeat>,
 }
@@ -80,6 +82,8 @@ impl RuntimeState {
             blocked_total: 0,
             retry_total: 0,
             fallback_activations: 0,
+            consecutive_failures: 0,
+            auto_fallback_threshold: 3,
             last_error: None,
             heartbeats: HashMap::new(),
         }
@@ -165,9 +169,19 @@ pub struct ReliabilityStatusResponse {
     pub blocked_total: u64,
     pub retry_total: u64,
     pub fallback_activations: u64,
+    pub consecutive_failures: u64,
+    pub auto_fallback_threshold: u64,
     pub online_agents: usize,
     pub stale_agents: usize,
     pub last_error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReliabilityReportRequest {
+    pub agent_id: String,
+    pub status: String,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 // ── Router ───────────────────────────────────────────────────────
@@ -187,6 +201,7 @@ pub fn create_proxy_router(state: Arc<ProxyState>) -> Router {
         .route("/v1/reliability/status", get(reliability_status))
         .route("/v1/reliability/fallback/activate", post(activate_fallback))
         .route("/v1/reliability/fallback/deactivate", post(deactivate_fallback))
+        .route("/v1/reliability/report", post(report_reliability_event))
         // ── Audit endpoints ──
         .route("/v1/audit", get(get_audit))
         .route("/v1/audit/stats", get(get_audit_stats))
@@ -247,6 +262,8 @@ async fn reliability_status(
         blocked_total: runtime.blocked_total,
         retry_total: runtime.retry_total,
         fallback_activations: runtime.fallback_activations,
+        consecutive_failures: runtime.consecutive_failures,
+        auto_fallback_threshold: runtime.auto_fallback_threshold,
         online_agents,
         stale_agents,
         last_error: runtime.last_error.clone(),
@@ -273,6 +290,53 @@ async fn deactivate_fallback(
 ) -> impl IntoResponse {
     let mut runtime = state.runtime.write().await;
     runtime.mode = "normal".to_string();
+    runtime.consecutive_failures = 0;
+
+    Json(HeartbeatResponse {
+        ok: true,
+        server_time: Utc::now(),
+        mode: runtime.mode.clone(),
+    })
+}
+
+async fn report_reliability_event(
+    State(state): State<Arc<ProxyState>>,
+    Json(req): Json<ReliabilityReportRequest>,
+) -> impl IntoResponse {
+    let mut runtime = state.runtime.write().await;
+    let status = req.status.to_ascii_lowercase();
+
+    match status.as_str() {
+        "ok" | "success" => {
+            runtime.consecutive_failures = 0;
+            runtime.last_error = None;
+        }
+        "error" | "failure" | "timeout" => {
+            runtime.retry_total += 1;
+            runtime.consecutive_failures += 1;
+            runtime.last_error = Some(
+                req.error
+                    .unwrap_or_else(|| format!("agent {} reported {}", req.agent_id, req.status)),
+            );
+
+            if runtime.consecutive_failures >= runtime.auto_fallback_threshold
+                && runtime.mode != "fallback"
+            {
+                runtime.mode = "fallback".to_string();
+                runtime.fallback_activations += 1;
+                warn!(
+                    "⚠️ Auto-fallback activated after {} consecutive failures",
+                    runtime.consecutive_failures
+                );
+            }
+        }
+        _ => {
+            runtime.last_error = Some(format!(
+                "invalid reliability status from {}: {}",
+                req.agent_id, req.status
+            ));
+        }
+    }
 
     Json(HeartbeatResponse {
         ok: true,
