@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation } from "react-router";
-import { Shield, Activity, Settings, List } from "lucide-react";
+import { Shield, Activity, Settings, List, PlayCircle } from "lucide-react";
 import { cn } from "./ui/utils";
 
 export function Layout() {
@@ -10,6 +10,7 @@ export function Layout() {
     { path: "/events", label: "事件历史", icon: List },
     { path: "/processes", label: "进程监控", icon: Shield },
     { path: "/configuration", label: "配置管理", icon: Settings },
+    { path: "/demo-live", label: "Live Demo", icon: PlayCircle },
   ];
 
   return (

@@ -133,6 +133,45 @@ export async function fetchReliabilityStatus(): Promise<ReliabilityStatus> {
 
 // ── WebSocket ────────────────────────────────────────────────────
 
+export interface InterceptRequest {
+  agent_id: string;
+  user_id: string;
+  session_id?: string;
+  tool: string;
+  args: Record<string, unknown>;
+}
+
+export interface InterceptResponse {
+  decision: "allow" | "block";
+  allowed: boolean;
+  risk_score: number;
+  reason: string;
+  matched_rule?: string | null;
+  dry_run?: boolean;
+  risk_breakdown?: {
+    total: number;
+    tool_weight: number;
+    arg_danger: number;
+    frequency_penalty: number;
+    details: string[];
+  };
+}
+
+export async function interceptToolCall(payload: InterceptRequest): Promise<InterceptResponse> {
+  const res = await fetch("/v1/intercept", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  const body = await res.json();
+  if (!res.ok && res.status !== 403) {
+    throw new Error(`POST /v1/intercept failed: ${res.status}`);
+  }
+
+  return body as InterceptResponse;
+}
+
 export function connectWebSocket(
   onEvent: (event: AlertEvent) => void,
   onError?: (err: Event) => void
