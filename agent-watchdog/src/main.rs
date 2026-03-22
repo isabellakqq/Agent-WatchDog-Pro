@@ -40,7 +40,7 @@ use chrono::Utc;
 use clap::Parser;
 use log::{debug, info, warn};
 use tokio::signal;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, RwLock};
 use uuid::Uuid;
 
 use agent_watchdog_common::FileOpenEvent;
@@ -79,6 +79,11 @@ struct Opt {
     /// Alerts are logged but processes are NOT killed.
     #[arg(long)]
     dry_run: bool,
+
+    /// Run only HTTP proxy/dashboard without loading eBPF.
+    /// Useful for macOS/dev demos where kernel eBPF is unavailable.
+    #[arg(long)]
+    proxy_only: bool,
 }
 
 // ── Entry point ──────────────────────────────────────────────────
@@ -155,6 +160,7 @@ async fn main() -> Result<()> {
         policy: policy_engine,
         risk: risk_engine,
         audit: audit_store,
+        runtime: Arc::new(RwLock::new(proxy::RuntimeState::new())),
     });
     let proxy_router = proxy::create_proxy_router(proxy_state);
 
@@ -169,6 +175,15 @@ async fn main() -> Result<()> {
             warn!("Firewall proxy error: {:#}", e);
         }
     });
+
+    if opt.proxy_only {
+        warn!("⚠️  Running in proxy-only mode (no eBPF kernel monitoring)");
+        signal::ctrl_c()
+            .await
+            .context("failed to listen for Ctrl-C signal")?;
+        info!("\n🛑  Shutting down Agent-WatchDog (proxy-only mode).");
+        return Ok(());
+    }
 
     // ── 3. Load the eBPF object ──────────────────────────────────
     info!("Loading eBPF object from: {}", opt.bpf_path);

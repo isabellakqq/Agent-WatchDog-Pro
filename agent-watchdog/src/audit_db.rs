@@ -32,13 +32,21 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use log::{info, warn};
 use rusqlite::{params, Connection};
+use std::sync::Mutex;
 
 use crate::audit::AuditRecord;
 
 /// SQLite-backed audit persistence store.
+/// Wrapped in Mutex<Connection> to satisfy Send + Sync requirements
+/// for use inside tokio::sync::RwLock<AuditStore>.
 pub struct AuditDb {
-    conn: Connection,
+    conn: Mutex<Connection>,
 }
+
+// SAFETY: Connection is only accessed through the Mutex, ensuring
+// exclusive access and making it safe to send across threads.
+unsafe impl Send for AuditDb {}
+unsafe impl Sync for AuditDb {}
 
 impl AuditDb {
     /// Open (or create) the SQLite database at the given path.
@@ -50,7 +58,7 @@ impl AuditDb {
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
             .with_context(|| "failed to set SQLite pragmas")?;
 
-        let db = Self { conn };
+        let db = Self { conn: Mutex::new(conn) };
         db.create_tables()?;
 
         info!("📦  Audit database opened at '{}'", path.display());
@@ -62,14 +70,14 @@ impl AuditDb {
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()
             .with_context(|| "failed to open in-memory audit database")?;
-        let db = Self { conn };
+        let db = Self { conn: Mutex::new(conn) };
         db.create_tables()?;
         Ok(db)
     }
 
     /// Create the required tables if they don't exist.
     fn create_tables(&self) -> Result<()> {
-        self.conn
+        self.conn.lock().unwrap()
             .execute_batch(
                 "CREATE TABLE IF NOT EXISTS audit_records (
                     id           TEXT PRIMARY KEY,
@@ -111,7 +119,7 @@ impl AuditDb {
         let risk_detail = serde_json::to_string(&record.risk_breakdown)
             .unwrap_or_else(|_| "{}".to_string());
 
-        self.conn
+        self.conn.lock().unwrap()
             .execute(
                 "INSERT OR REPLACE INTO audit_records
                  (id, timestamp, agent_id, user_id, session_id, tool, args,
@@ -142,8 +150,8 @@ impl AuditDb {
     ///
     /// Used on startup to warm the in-memory cache.
     pub fn load_recent(&self, limit: usize) -> Result<Vec<AuditRecord>> {
-        let mut stmt = self
-            .conn
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
             .prepare(
                 "SELECT id, timestamp, agent_id, user_id, session_id, tool, args,
                         decision, risk_score, risk_detail, reason, matched_rule, dry_run
@@ -210,8 +218,7 @@ impl AuditDb {
 
     /// Count total records in the database.
     pub fn count(&self) -> Result<usize> {
-        let count: i64 = self
-            .conn
+        let count: i64 = self.conn.lock().unwrap()
             .query_row("SELECT COUNT(*) FROM audit_records", [], |row| row.get(0))
             .with_context(|| "failed to count audit records")?;
         Ok(count as usize)

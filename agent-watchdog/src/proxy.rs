@@ -20,6 +20,7 @@
 //!
 //! Both modes are non-invasive — no need to modify agent core code.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{
@@ -28,9 +29,10 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::audit::SharedAuditStore;
@@ -44,6 +46,48 @@ pub struct ProxyState {
     pub policy: PolicyEngine,
     pub risk: RiskEngine,
     pub audit: SharedAuditStore,
+    pub runtime: SharedRuntimeState,
+}
+
+pub type SharedRuntimeState = Arc<RwLock<RuntimeState>>;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentHeartbeat {
+    pub agent_id: String,
+    pub session_id: Option<String>,
+    pub model: Option<String>,
+    pub last_seen: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RuntimeState {
+    pub started_at: DateTime<Utc>,
+    pub mode: String,
+    pub intercept_total: u64,
+    pub blocked_total: u64,
+    pub retry_total: u64,
+    pub fallback_activations: u64,
+    pub consecutive_failures: u64,
+    pub auto_fallback_threshold: u64,
+    pub last_error: Option<String>,
+    pub heartbeats: HashMap<String, AgentHeartbeat>,
+}
+
+impl RuntimeState {
+    pub fn new() -> Self {
+        Self {
+            started_at: Utc::now(),
+            mode: "normal".to_string(),
+            intercept_total: 0,
+            blocked_total: 0,
+            retry_total: 0,
+            fallback_activations: 0,
+            consecutive_failures: 0,
+            auto_fallback_threshold: 3,
+            last_error: None,
+            heartbeats: HashMap::new(),
+        }
+    }
 }
 
 // ── Request / Response types ─────────────────────────────────────
@@ -99,6 +143,47 @@ pub struct AuditResponse {
     pub stats: crate::audit::AuditStats,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct HeartbeatRequest {
+    pub agent_id: String,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct HeartbeatResponse {
+    pub ok: bool,
+    pub server_time: DateTime<Utc>,
+    pub mode: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReliabilityStatusResponse {
+    pub started_at: DateTime<Utc>,
+    pub server_time: DateTime<Utc>,
+    pub uptime_seconds: i64,
+    pub mode: String,
+    pub intercept_total: u64,
+    pub blocked_total: u64,
+    pub retry_total: u64,
+    pub fallback_activations: u64,
+    pub consecutive_failures: u64,
+    pub auto_fallback_threshold: u64,
+    pub online_agents: usize,
+    pub stale_agents: usize,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReliabilityReportRequest {
+    pub agent_id: String,
+    pub status: String,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
 // ── Router ───────────────────────────────────────────────────────
 
 /// Build the firewall proxy router.
@@ -111,6 +196,12 @@ pub fn create_proxy_router(state: Arc<ProxyState>) -> Router {
     Router::new()
         // ── Core firewall endpoint ──
         .route("/v1/intercept", post(intercept))
+        // ── 24/7 reliability endpoints ──
+        .route("/v1/agent/heartbeat", post(agent_heartbeat))
+        .route("/v1/reliability/status", get(reliability_status))
+        .route("/v1/reliability/fallback/activate", post(activate_fallback))
+        .route("/v1/reliability/fallback/deactivate", post(deactivate_fallback))
+        .route("/v1/reliability/report", post(report_reliability_event))
         // ── Audit endpoints ──
         .route("/v1/audit", get(get_audit))
         .route("/v1/audit/stats", get(get_audit_stats))
@@ -124,6 +215,134 @@ pub fn create_proxy_router(state: Arc<ProxyState>) -> Router {
 
 async fn health() -> &'static str {
     "ok"
+}
+
+async fn agent_heartbeat(
+    State(state): State<Arc<ProxyState>>,
+    Json(req): Json<HeartbeatRequest>,
+) -> impl IntoResponse {
+    let mut runtime = state.runtime.write().await;
+    runtime.heartbeats.insert(
+        req.agent_id.clone(),
+        AgentHeartbeat {
+            agent_id: req.agent_id,
+            session_id: req.session_id,
+            model: req.model,
+            last_seen: Utc::now(),
+        },
+    );
+
+    Json(HeartbeatResponse {
+        ok: true,
+        server_time: Utc::now(),
+        mode: runtime.mode.clone(),
+    })
+}
+
+async fn reliability_status(
+    State(state): State<Arc<ProxyState>>,
+) -> impl IntoResponse {
+    let runtime = state.runtime.read().await;
+    let now = Utc::now();
+    let stale_cutoff = now - chrono::Duration::seconds(120);
+
+    let online_agents = runtime
+        .heartbeats
+        .values()
+        .filter(|hb| hb.last_seen > stale_cutoff)
+        .count();
+    let stale_agents = runtime.heartbeats.len().saturating_sub(online_agents);
+
+    Json(ReliabilityStatusResponse {
+        started_at: runtime.started_at,
+        server_time: now,
+        uptime_seconds: (now - runtime.started_at).num_seconds(),
+        mode: runtime.mode.clone(),
+        intercept_total: runtime.intercept_total,
+        blocked_total: runtime.blocked_total,
+        retry_total: runtime.retry_total,
+        fallback_activations: runtime.fallback_activations,
+        consecutive_failures: runtime.consecutive_failures,
+        auto_fallback_threshold: runtime.auto_fallback_threshold,
+        online_agents,
+        stale_agents,
+        last_error: runtime.last_error.clone(),
+    })
+}
+
+async fn activate_fallback(
+    State(state): State<Arc<ProxyState>>,
+) -> impl IntoResponse {
+    let mut runtime = state.runtime.write().await;
+    runtime.mode = "fallback".to_string();
+    runtime.fallback_activations += 1;
+    runtime.retry_total += 1;
+
+    Json(HeartbeatResponse {
+        ok: true,
+        server_time: Utc::now(),
+        mode: runtime.mode.clone(),
+    })
+}
+
+async fn deactivate_fallback(
+    State(state): State<Arc<ProxyState>>,
+) -> impl IntoResponse {
+    let mut runtime = state.runtime.write().await;
+    runtime.mode = "normal".to_string();
+    runtime.consecutive_failures = 0;
+
+    Json(HeartbeatResponse {
+        ok: true,
+        server_time: Utc::now(),
+        mode: runtime.mode.clone(),
+    })
+}
+
+async fn report_reliability_event(
+    State(state): State<Arc<ProxyState>>,
+    Json(req): Json<ReliabilityReportRequest>,
+) -> impl IntoResponse {
+    let mut runtime = state.runtime.write().await;
+    let status = req.status.to_ascii_lowercase();
+
+    match status.as_str() {
+        "ok" | "success" => {
+            runtime.consecutive_failures = 0;
+            runtime.last_error = None;
+        }
+        "error" | "failure" | "timeout" => {
+            runtime.retry_total += 1;
+            runtime.consecutive_failures += 1;
+            runtime.last_error = Some(
+                req.error
+                    .unwrap_or_else(|| format!("agent {} reported {}", req.agent_id, req.status)),
+            );
+
+            if runtime.consecutive_failures >= runtime.auto_fallback_threshold
+                && runtime.mode != "fallback"
+            {
+                runtime.mode = "fallback".to_string();
+                runtime.fallback_activations += 1;
+                warn!(
+                    "⚠️ Auto-fallback activated after {} consecutive failures",
+                    runtime.consecutive_failures
+                );
+            }
+        }
+        _ => {
+            runtime.last_error = Some(format!(
+                "invalid reliability status from {}: {}",
+                req.agent_id, req.status
+            ));
+        }
+    }
+
+    Json(HeartbeatResponse {
+        ok: true,
+        server_time: Utc::now(),
+        mode: runtime.mode.clone(),
+    })
 }
 
 /// **THE CORE FIREWALL ENDPOINT.**
@@ -147,6 +366,11 @@ async fn intercept(
         session_id: req.session_id,
     };
 
+    {
+        let mut runtime = state.runtime.write().await;
+        runtime.intercept_total += 1;
+    }
+
     // 1. Compute risk score
     let risk = state.risk.score(
         &tool_call.tool,
@@ -167,6 +391,14 @@ async fn intercept(
     // 4. Log the decision
     match result.decision {
         Decision::Block => {
+            {
+                let mut runtime = state.runtime.write().await;
+                runtime.blocked_total += 1;
+                runtime.last_error = Some(format!(
+                    "blocked tool={} agent={} reason={}",
+                    tool_call.tool, tool_call.agent_id, result.reason
+                ));
+            }
             warn!(
                 "🛑 BLOCKED: agent={} tool={} args={} reason={}",
                 tool_call.agent_id,

@@ -5,7 +5,7 @@
  * (configured in vite.config.ts).
  */
 
-import type { AlertEvent, SystemStats } from "./types";
+import type { AlertEvent, ReliabilityStatus, SystemStats } from "./types";
 
 // ── Type mapping helpers ─────────────────────────────────────────
 // Backend uses snake_case, frontend uses camelCase.
@@ -28,6 +28,22 @@ interface BackendStats {
   total_events: number;
 }
 
+interface BackendReliabilityStatus {
+  started_at: string;
+  server_time: string;
+  uptime_seconds: number;
+  mode: string;
+  intercept_total: number;
+  blocked_total: number;
+  retry_total: number;
+  fallback_activations: number;
+  consecutive_failures: number;
+  auto_fallback_threshold: number;
+  online_agents: number;
+  stale_agents: number;
+  last_error?: string | null;
+}
+
 function mapAlert(raw: BackendAlertEvent): AlertEvent {
   return {
     id: raw.id,
@@ -47,6 +63,24 @@ function mapStats(raw: BackendStats): SystemStats {
     blockedProcesses: raw.blocked_count,
     ignoredAlerts: raw.ignored_count,
     totalAlerts: raw.total_events,
+  };
+}
+
+function mapReliability(raw: BackendReliabilityStatus): ReliabilityStatus {
+  return {
+    startedAt: raw.started_at,
+    serverTime: raw.server_time,
+    uptimeSeconds: raw.uptime_seconds,
+    mode: raw.mode,
+    interceptTotal: raw.intercept_total,
+    blockedTotal: raw.blocked_total,
+    retryTotal: raw.retry_total,
+    fallbackActivations: raw.fallback_activations,
+    consecutiveFailures: raw.consecutive_failures,
+    autoFallbackThreshold: raw.auto_fallback_threshold,
+    onlineAgents: raw.online_agents,
+    staleAgents: raw.stale_agents,
+    lastError: raw.last_error,
   };
 }
 
@@ -90,7 +124,53 @@ export async function ignoreEvent(id: string): Promise<ActionResponse> {
   return res.json();
 }
 
+export async function fetchReliabilityStatus(): Promise<ReliabilityStatus> {
+  const res = await fetch("/v1/reliability/status");
+  if (!res.ok) throw new Error(`GET /v1/reliability/status failed: ${res.status}`);
+  const raw: BackendReliabilityStatus = await res.json();
+  return mapReliability(raw);
+}
+
 // ── WebSocket ────────────────────────────────────────────────────
+
+export interface InterceptRequest {
+  agent_id: string;
+  user_id: string;
+  session_id?: string;
+  tool: string;
+  args: Record<string, unknown>;
+}
+
+export interface InterceptResponse {
+  decision: "allow" | "block";
+  allowed: boolean;
+  risk_score: number;
+  reason: string;
+  matched_rule?: string | null;
+  dry_run?: boolean;
+  risk_breakdown?: {
+    total: number;
+    tool_weight: number;
+    arg_danger: number;
+    frequency_penalty: number;
+    details: string[];
+  };
+}
+
+export async function interceptToolCall(payload: InterceptRequest): Promise<InterceptResponse> {
+  const res = await fetch("/v1/intercept", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  const body = await res.json();
+  if (!res.ok && res.status !== 403) {
+    throw new Error(`POST /v1/intercept failed: ${res.status}`);
+  }
+
+  return body as InterceptResponse;
+}
 
 export function connectWebSocket(
   onEvent: (event: AlertEvent) => void,

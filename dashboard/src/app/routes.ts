@@ -4,6 +4,7 @@ import { Events } from "./pages/Events";
 import { Configuration } from "./pages/Configuration";
 import { Processes } from "./pages/Processes";
 import { Layout } from "./components/Layout";
+import { LiveDemo } from "./pages/LiveDemo";
 
 export const router = createBrowserRouter([
   {
@@ -14,6 +15,7 @@ export const router = createBrowserRouter([
       { path: "events", Component: Events },
       { path: "configuration", Component: Configuration },
       { path: "processes", Component: Processes },
+      { path: "demo-live", Component: LiveDemo },
     ],
   },
 ]);
