@@ -1,131 +1,122 @@
 # AgentWatchdogPro
 
-<p align="center">
-  <b>Open-source Runtime + App-Layer Firewall for AI Agents</b><br/>
-  在 Agent 执行工具前，实时判断并阻断高风险动作（Prompt Injection / SQLi / Secret Exfiltration）
-</p>
-
-<p align="center">
-  <a href="https://github.com/isabellakqq/Agent-WatchDog-Pro/releases/tag/v0.1.0-open-source">Latest Release</a>
-  ·
-  <a href="./ROADMAP.md">Roadmap</a>
-  ·
-  <a href="./CONTRIBUTING.md">Contributing</a>
-</p>
+**EN:** Open-source app-layer + runtime firewall for AI agents.  
+**中文：** 面向 AI Agent 的开源应用层 + 运行时防火墙。
 
 ---
 
-## Why AgentWatchdogPro
+## What is AgentWatchdogPro? | 这是什么
 
-AI Agent 的风险不再只是“回答错误”，而是**执行错误动作**。  
-AgentWatchdogPro 提供一个可插拔的安全闸层：
-
-- 在工具调用前做风险评估
-- 返回 `allow / block`（含理由与命中规则）
-- 全量审计决策轨迹
-- 支持可靠性 fallback（自动/手动）
+**EN:** AgentWatchdogPro sits between your agent and tools. It intercepts tool calls before execution, scores risk, and returns `allow` / `block` with reason + matched rule.  
+**中文：** AgentWatchdogPro 位于 Agent 与工具之间，在执行前拦截请求、进行风险评分，并返回 `allow` / `block`（包含原因和命中规则）。
 
 ---
 
-## What it protects
+## Architecture Diagram | 架构图
 
-- Prompt injection 驱动的危险工具调用
-- SQL injection 模式
-- 敏感文件读取（`/etc/shadow` / SSH keys / `.env` / cloud creds）
-- 数据外泄行为模式（webhook/paste/ngrok 等）
-- 危险 shell 指令模式
-
----
-
-## Architecture Diagram
-
-```mermaid
-flowchart LR
-    A[Agent / Workflow Engine] --> B[/v1/intercept]
-    B --> C[Risk Scoring Engine]
-    C --> D[Policy Matcher]
-    D -->|allow| E[Tool Execution]
-    D -->|block| F[Blocked + Reason]
-    D --> G[Audit Store]
-    G --> H[Dashboard /demo-live]
-    I[Heartbeat + Reliability Report] --> J[Reliability Control Plane]
-    J --> K[Auto Fallback / Manual Fallback]
+```text
+┌───────────────────────────┐
+│ Agent / Workflow Engine   │
+└─────────────┬─────────────┘
+              │ tool call
+              ▼
+      ┌───────────────────┐
+      │ /v1/intercept API │  (App-layer Firewall)
+      └─────────┬─────────┘
+                ▼
+      ┌───────────────────┐
+      │ Risk + Policy     │
+      │ - prompt injection│
+      │ - SQLi patterns   │
+      │ - secret access   │
+      │ - exfil patterns  │
+      └───────┬─────┬─────┘
+              │     │
+         allow▼     ▼block
+      ┌──────────┐  ┌────────────────────┐
+      │ Tool Exec│  │ Block + Reason/Rule│
+      └──────────┘  └────────────────────┘
+              \        /
+               \      /
+                ▼    ▼
+            ┌──────────────┐
+            │ Audit Store  │
+            └──────┬───────┘
+                   ▼
+            ┌──────────────┐
+            │ Dashboard    │
+            └──────────────┘
 ```
 
 ---
 
-## Quick Start (Local, app-layer mode)
+## Core Features | 核心能力
 
-> 这是最推荐的安装方式：不依赖 Linux eBPF，Mac/Windows/Linux 都可先跑通。
+- **EN:** Pre-execution policy enforcement for agent tool calls  
+  **中文：** 工具执行前的策略拦截
+- **EN:** Real-time decision: `allow` / `block` + reason + matched rule  
+  **中文：** 实时决策：`allow` / `block` + 原因 + 命中规则
+- **EN:** Audit trail for replay/compliance/debugging  
+  **中文：** 审计轨迹（回放/合规/排障）
+- **EN:** Reliability controls (heartbeat, failure report, fallback)  
+  **中文：** 稳定性控制（心跳、失败上报、fallback）
+- **EN:** Optional Linux runtime monitoring (eBPF mode)  
+  **中文：** 可选 Linux 运行时监控（eBPF 模式）
 
-### 1) Clone
+---
+
+## SDK Status | SDK 现状
+
+**EN:** Current repo includes a **Python SDK** (`sdk/python/agent_firewall.py`) for app-layer integration.  
+**中文：** 当前仓库已提供 **Python SDK**（`sdk/python/agent_firewall.py`）用于应用层接入。
+
+**EN:** Node/other SDKs are planned.  
+**中文：** Node 等其他 SDK 在路线图中。
+
+---
+
+## Quick Start (Local) | 本地快速开始
+
+### 1) Clone | 克隆仓库
 
 ```bash
 git clone https://github.com/isabellakqq/Agent-WatchDog-Pro.git
 cd Agent-WatchDog-Pro
 ```
 
-### 2) Build backend
+### 2) Build backend | 编译后端
 
 ```bash
 cargo build -p agent-watchdog --release
 ```
 
-### 3) Start firewall proxy (proxy-only)
+### 3) Start app-layer firewall | 启动应用层防火墙
 
 ```bash
 ./target/release/agent-watchdog --proxy-only
 ```
 
-默认监听：`http://localhost:3001`
+**EN:** Default endpoint: `http://localhost:3001`  
+**中文：** 默认地址：`http://localhost:3001`
 
-### 4) Run attack simulation
-
-```bash
-python3 tests/attack_simulation.py --host localhost --port 3001 --skip-bench
-```
-
-### 5) Open visual live demo dashboard (optional)
+### 4) Example intercept request | 拦截请求示例
 
 ```bash
-cd dashboard
-npm install
-npm run dev -- --host 0.0.0.0 --port 3000
+curl -s -X POST http://localhost:3001/v1/intercept \
+  -H "content-type: application/json" \
+  -d '{
+    "agent_id":"demo-agent",
+    "user_id":"demo-user",
+    "tool":"file_read",
+    "args":{"path":"/etc/shadow"}
+  }'
 ```
-
-浏览器打开：`http://localhost:3000/demo-live`
 
 ---
 
-## API (Core)
+## Key APIs | 关键接口
 
-### Intercept
-
-`POST /v1/intercept`
-
-```json
-{
-  "agent_id": "demo-agent",
-  "user_id": "demo-user",
-  "tool": "file_read",
-  "args": { "path": "/etc/shadow" }
-}
-```
-
-Response:
-
-```json
-{
-  "decision": "block",
-  "allowed": false,
-  "risk_score": 60.0,
-  "reason": "Blocked by policy",
-  "matched_rule": "block-shadow-access"
-}
-```
-
-### Reliability
-
+- `POST /v1/intercept`
 - `POST /v1/agent/heartbeat`
 - `POST /v1/reliability/report`
 - `GET /v1/reliability/status`
@@ -134,38 +125,12 @@ Response:
 
 ---
 
-## Product Modes
+## Docs | 文档
 
-### Mode A — App-layer Firewall (default)
-- 跨平台（Mac / Windows / Linux / Cloud）
-- 通过 API / SDK 拦截工具调用
-
-### Mode B — Linux Runtime Firewall (advanced)
-- 基于 eBPF 的运行时监控
-- 适合 Linux 生产环境深度防护
+- Roadmap: [`ROADMAP.md`](./ROADMAP.md)
+- Contributing: [`CONTRIBUTING.md`](./CONTRIBUTING.md)
 
 ---
-
-## Demo Assets
-
-- Live demo page: `dashboard/src/app/pages/LiveDemo.tsx`
-- Attack simulation: `tests/attack_simulation.py`
-- Reliability demo: `tests/demo_reliability.py`
-
----
-
-## Open-source Plan
-
-- GTM plan: `docs/OPEN_SOURCE-GTM-PLAN.md`
-- Social launch posts: `docs/SOCIAL-POSTS-LAUNCH-ZH-EN.md`
-- 7-day launch calendar: `docs/LAUNCH-WEEK-CALENDAR.md`
-
----
-
-## Contributing
-
-欢迎贡献：规则引擎、误报优化、SDK、文档、样例。  
-详见：[`CONTRIBUTING.md`](./CONTRIBUTING.md)
 
 ## License
 
