@@ -1,85 +1,83 @@
 # AgentWatchdogPro
 
-**Open-source runtime + app-layer firewall for AI agents.**
+<p align="center">
+  <b>Open-source Runtime + App-Layer Firewall for AI Agents</b><br/>
+  在 Agent 执行工具前，实时判断并阻断高风险动作（Prompt Injection / SQLi / Secret Exfiltration）
+</p>
 
-AgentWatchdogPro blocks unsafe agent actions in real time (prompt injection, SQLi patterns, secret-file access, data exfil attempts), with audit trails and reliability fallback controls.
-
----
-
-## Why this exists
-
-AI agents are now taking real actions in production.
-The failure mode is not just “bad answer” — it is **unsafe execution**.
-
-AgentWatchdogPro gives you a guardrail layer between agent intent and tool execution.
-
----
-
-## What it does
-
-- **App-layer firewall (cross-platform)**
-  - Intercepts agent tool calls via `/v1/intercept`
-  - Scores risk + matches policy rules
-  - Returns `allow` / `block` with reason and rule
-- **Runtime monitoring (Linux mode)**
-  - eBPF-based file access detection for sensitive paths
-- **Audit trail**
-  - Structured decision logs for replay, debugging, and compliance
-- **Reliability control plane**
-  - Heartbeats, failure counters, auto fallback, manual fallback toggle
-- **Dashboard**
-  - Real-time events + reliability panel + live attack demo page
+<p align="center">
+  <a href="https://github.com/isabellakqq/Agent-WatchDog-Pro/releases/tag/v0.1.0-open-source">Latest Release</a>
+  ·
+  <a href="./ROADMAP.md">Roadmap</a>
+  ·
+  <a href="./CONTRIBUTING.md">Contributing</a>
+</p>
 
 ---
 
-## Threats covered (default)
+## Why AgentWatchdogPro
 
-- Prompt-injection-style unsafe action requests
-- SQL injection patterns in query/tool payloads
-- Secret-file reads (`/etc/shadow`, SSH keys, `.env`, cloud creds)
-- Data exfil channels (pastebin/webhook/ngrok-style patterns)
-- Dangerous shell command patterns
+AI Agent 的风险不再只是“回答错误”，而是**执行错误动作**。  
+AgentWatchdogPro 提供一个可插拔的安全闸层：
 
----
-
-## Architecture (high-level)
-
-1. Agent/tool call enters firewall proxy (`/v1/intercept`)
-2. Risk engine scores payload + policy matcher evaluates rules
-3. Decision returned (`allow` or `block`) before tool execution
-4. Decision persisted to audit store
-5. Reliability layer tracks failures and can auto-switch fallback mode
+- 在工具调用前做风险评估
+- 返回 `allow / block`（含理由与命中规则）
+- 全量审计决策轨迹
+- 支持可靠性 fallback（自动/手动）
 
 ---
 
-## Quickstart (app-layer mode)
+## What it protects
 
-### 1) Build backend
+- Prompt injection 驱动的危险工具调用
+- SQL injection 模式
+- 敏感文件读取（`/etc/shadow` / SSH keys / `.env` / cloud creds）
+- 数据外泄行为模式（webhook/paste/ngrok 等）
+- 危险 shell 指令模式
+
+---
+
+## Architecture Diagram
+
+```mermaid
+flowchart LR
+    A[Agent / Workflow Engine] --> B[/v1/intercept]
+    B --> C[Risk Scoring Engine]
+    C --> D[Policy Matcher]
+    D -->|allow| E[Tool Execution]
+    D -->|block| F[Blocked + Reason]
+    D --> G[Audit Store]
+    G --> H[Dashboard /demo-live]
+    I[Heartbeat + Reliability Report] --> J[Reliability Control Plane]
+    J --> K[Auto Fallback / Manual Fallback]
+```
+
+---
+
+## Quick Start (Local, app-layer mode)
+
+> 这是最推荐的安装方式：不依赖 Linux eBPF，Mac/Windows/Linux 都可先跑通。
+
+### 1) Clone
+
+```bash
+git clone https://github.com/isabellakqq/Agent-WatchDog-Pro.git
+cd Agent-WatchDog-Pro
+```
+
+### 2) Build backend
 
 ```bash
 cargo build -p agent-watchdog --release
 ```
 
-### 2) Start firewall proxy only (no eBPF required)
+### 3) Start firewall proxy (proxy-only)
 
 ```bash
 ./target/release/agent-watchdog --proxy-only
 ```
 
-### 3) Send a test intercept request
-
-```bash
-curl -s -X POST http://localhost:3001/v1/intercept \
-  -H "content-type: application/json" \
-  -d '{
-    "agent_id":"demo-agent",
-    "user_id":"demo-user",
-    "tool":"file_read",
-    "args":{"path":"/etc/shadow"}
-  }'
-```
-
-Expected result: `block` with matched rule.
+默认监听：`http://localhost:3001`
 
 ### 4) Run attack simulation
 
@@ -87,54 +85,87 @@ Expected result: `block` with matched rule.
 python3 tests/attack_simulation.py --host localhost --port 3001 --skip-bench
 ```
 
+### 5) Open visual live demo dashboard (optional)
+
+```bash
+cd dashboard
+npm install
+npm run dev -- --host 0.0.0.0 --port 3000
+```
+
+浏览器打开：`http://localhost:3000/demo-live`
+
 ---
 
-## Live Demo UI
+## API (Core)
 
-Dashboard includes a visual live demo page:
+### Intercept
 
-- **Path:** `/demo-live`
-- Trigger attacks via buttons (SQLi / secret file / prompt injection)
-- See real-time `ALLOW/BLOCK`, risk score, matched rule, and latency
+`POST /v1/intercept`
 
----
+```json
+{
+  "agent_id": "demo-agent",
+  "user_id": "demo-user",
+  "tool": "file_read",
+  "args": { "path": "/etc/shadow" }
+}
+```
 
-## Reliability API
+Response:
+
+```json
+{
+  "decision": "block",
+  "allowed": false,
+  "risk_score": 60.0,
+  "reason": "Blocked by policy",
+  "matched_rule": "block-shadow-access"
+}
+```
+
+### Reliability
 
 - `POST /v1/agent/heartbeat`
-- `GET /v1/reliability/status`
 - `POST /v1/reliability/report`
+- `GET /v1/reliability/status`
 - `POST /v1/reliability/fallback/activate`
 - `POST /v1/reliability/fallback/deactivate`
 
 ---
 
-## Product modes
+## Product Modes
 
-- **Mode A: App-layer firewall (recommended default)**
-  - Works for macOS / Windows / Linux / cloud agents
-- **Mode B: Linux runtime firewall (advanced hardening)**
-  - Adds eBPF-based runtime visibility and blocking workflows
+### Mode A — App-layer Firewall (default)
+- 跨平台（Mac / Windows / Linux / Cloud）
+- 通过 API / SDK 拦截工具调用
+
+### Mode B — Linux Runtime Firewall (advanced)
+- 基于 eBPF 的运行时监控
+- 适合 Linux 生产环境深度防护
 
 ---
 
-## Roadmap
+## Demo Assets
 
-See [`ROADMAP.md`](./ROADMAP.md) for public milestones.
+- Live demo page: `dashboard/src/app/pages/LiveDemo.tsx`
+- Attack simulation: `tests/attack_simulation.py`
+- Reliability demo: `tests/demo_reliability.py`
+
+---
+
+## Open-source Plan
+
+- GTM plan: `docs/OPEN_SOURCE-GTM-PLAN.md`
+- Social launch posts: `docs/SOCIAL-POSTS-LAUNCH-ZH-EN.md`
+- 7-day launch calendar: `docs/LAUNCH-WEEK-CALENDAR.md`
 
 ---
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](./CONTRIBUTING.md).
-
-If you want to help, a great place to start is:
-- policy rules
-- false-positive reduction
-- language SDK integrations
-- attack replay datasets
-
----
+欢迎贡献：规则引擎、误报优化、SDK、文档、样例。  
+详见：[`CONTRIBUTING.md`](./CONTRIBUTING.md)
 
 ## License
 
