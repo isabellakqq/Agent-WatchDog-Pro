@@ -65,6 +65,26 @@
 
 ---
 
+## Browser Guard Extension | 浏览器防护扩展
+
+**EN:** Added `browser-extension/` (Chrome Manifest V3) to block browser AI access and AI action-taking by default.
+**中文：** 新增 `browser-extension/`（Chrome MV3 扩展），默认阻断浏览器 AI 访问与 AI 代操作。
+
+### Browser Guard quick start | 浏览器扩展快速使用
+
+```bash
+# 1) Open Chrome extensions page
+chrome://extensions
+
+# 2) Enable Developer mode
+# 3) Load unpacked -> select Agent-WatchDog-Pro/browser-extension
+```
+
+**Modes / 模式**
+- `block-all`: block all AI access/action-taking（全部阻断）
+- `policy-check`: call WatchDog `POST /v1/intercept`（调用策略引擎判定）
+- `allow-all`: allow all（全部放行）
+
 ## SDK Status | SDK 现状
 
 **EN:** Current repo includes a **Python SDK** (`sdk/python/agent_firewall.py`) for app-layer integration.  

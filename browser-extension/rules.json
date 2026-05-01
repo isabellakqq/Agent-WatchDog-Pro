@@ -1,0 +1,50 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": { "urlFilter": "||generativelanguage.googleapis.com^", "resourceTypes": ["xmlhttprequest", "sub_frame", "script"] }
+  },
+  {
+    "id": 2,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": { "urlFilter": "||gemini.google.com^", "resourceTypes": ["main_frame", "sub_frame", "xmlhttprequest", "script"] }
+  },
+  {
+    "id": 3,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": { "urlFilter": "||aistudio.google.com^", "resourceTypes": ["main_frame", "sub_frame", "xmlhttprequest", "script"] }
+  },
+  {
+    "id": 4,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": { "urlFilter": "||api.openai.com^", "resourceTypes": ["xmlhttprequest", "sub_frame", "script"] }
+  },
+  {
+    "id": 5,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": { "urlFilter": "||api.anthropic.com^", "resourceTypes": ["xmlhttprequest", "sub_frame", "script"] }
+  },
+  {
+    "id": 6,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": { "urlFilter": "||chatgpt.com^", "resourceTypes": ["main_frame", "sub_frame", "xmlhttprequest", "script"] }
+  },
+  {
+    "id": 7,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": { "urlFilter": "||claude.ai^", "resourceTypes": ["main_frame", "sub_frame", "xmlhttprequest", "script"] }
+  },
+  {
+    "id": 8,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": { "urlFilter": "||copilot.microsoft.com^", "resourceTypes": ["main_frame", "sub_frame", "xmlhttprequest", "script"] }
+  }
+]

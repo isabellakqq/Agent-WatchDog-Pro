@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "Agent WatchDog Browser Firewall",
+  "description": "Block browser AI access and AI action-taking by default, with optional WatchDog policy checks.",
+  "version": "0.1.0",
+  "permissions": [
+    "storage",
+    "tabs",
+    "activeTab",
+    "scripting",
+    "alarms",
+    "declarativeNetRequest",
+    "declarativeNetRequestFeedback",
+    "webRequest"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "http://localhost:3001/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Agent WatchDog",
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["page-hook.js", "styles.css"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "ai_block_rules",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  }
+}

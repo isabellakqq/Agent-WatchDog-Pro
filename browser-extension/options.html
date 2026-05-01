@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agent WatchDog Options</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="awd-options">
+    <div class="awd-card awd-wide">
+      <h1>Agent WatchDog - Options</h1>
+      <p class="awd-muted">Advanced Configuration / 高级配置</p>
+
+      <label class="awd-label">WatchDog Backend URL / 后端地址</label>
+      <input id="backendUrl" class="awd-input" type="text" placeholder="http://localhost:3001" />
+
+      <label class="awd-label">Global Policy / 全局策略</label>
+      <select id="globalPolicy" class="awd-input">
+        <option value="block-all">Block All AI / 全部阻断</option>
+        <option value="policy-check">Allow with Policy / 策略判定</option>
+        <option value="allow-all">Allow All / 全部放行</option>
+      </select>
+
+      <label class="awd-label">Site Rules (JSON) / 站点规则（JSON）</label>
+      <textarea id="siteRules" class="awd-textarea" rows="12" placeholder='{"example.com":"block-all"}'></textarea>
+
+      <div class="awd-actions">
+        <button id="save" class="awd-btn">Save / 保存</button>
+        <button id="export" class="awd-btn">Export / 导出</button>
+        <label class="awd-btn" for="importFile">Import / 导入</label>
+        <input id="importFile" type="file" accept="application/json" hidden />
+      </div>
+
+      <p id="status" class="awd-muted"></p>
+    </div>
+
+    <script src="options.js"></script>
+  </body>
+</html>

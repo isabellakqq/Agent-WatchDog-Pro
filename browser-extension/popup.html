@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agent WatchDog</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="awd-popup">
+    <div class="awd-card">
+      <h1>Agent WatchDog</h1>
+      <p class="awd-muted">Browser AI Firewall / 浏览器 AI 防火墙</p>
+
+      <label class="awd-label">Global Policy / 全局策略</label>
+      <select id="globalPolicy" class="awd-input">
+        <option value="block-all">Block All AI / 全部阻断</option>
+        <option value="policy-check">Allow with Policy / 策略判定</option>
+        <option value="allow-all">Allow All / 全部放行</option>
+      </select>
+
+      <div class="awd-row">
+        <span>WatchDog Backend / 后端状态</span>
+        <span id="backendStatus" class="awd-badge">checking...</span>
+      </div>
+
+      <hr />
+
+      <div class="awd-row">
+        <span>Current Site / 当前站点</span>
+        <span id="currentHost" class="awd-mono">-</span>
+      </div>
+
+      <label class="awd-label">Site Rule / 站点规则</label>
+      <select id="sitePolicy" class="awd-input">
+        <option value="inherit">Inherit Global / 继承全局</option>
+        <option value="block-all">Block / 阻断</option>
+        <option value="policy-check">Policy Check / 策略判定</option>
+        <option value="allow-all">Allow / 放行</option>
+      </select>
+
+      <button id="saveSiteRule" class="awd-btn">Save Site Rule / 保存站点规则</button>
+
+      <hr />
+
+      <div class="awd-row">
+        <span>Recent Blocked Attempts / 最近拦截</span>
+        <button id="clearEvents" class="awd-btn awd-btn-small">Clear</button>
+      </div>
+      <div id="events" class="awd-events"></div>
+
+      <a href="options.html" target="_blank" class="awd-link">Advanced Settings / 高级设置</a>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
